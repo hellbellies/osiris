@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useToast } from "@nuxt/ui/composables";
 import { useTodosStore } from "../stores/todosStore";
+import TodoDescription from "./TodoDescription.vue";
 import type { AppError, Todo } from "@/types";
 
 const props = defineProps<{ todo: Todo }>();
@@ -18,7 +19,6 @@ const toast = useToast();
 const toggling = ref(false);
 
 const done = computed(() => props.todo.completedAt !== null);
-const firstLine = computed(() => props.todo.description.split("\n", 1)[0]);
 
 async function toggle(): Promise<void> {
   toggling.value = true;
@@ -33,13 +33,16 @@ async function toggle(): Promise<void> {
 </script>
 
 <template>
-  <li class="flex items-center gap-3 px-4 py-2.5">
-    <UCheckbox
-      :model-value="done"
-      :disabled="toggling"
-      :aria-label="done ? `Reopen ${todo.title}` : `Complete ${todo.title}`"
-      @update:model-value="toggle"
-    />
+  <li class="flex items-start gap-3 px-4 py-2.5">
+    <!-- Rows align to the top for multi-line descriptions; keep the checkbox on the title's line. -->
+    <div class="flex h-6 items-center">
+      <UCheckbox
+        :model-value="done"
+        :disabled="toggling"
+        :aria-label="done ? `Reopen ${todo.title}` : `Complete ${todo.title}`"
+        @update:model-value="toggle"
+      />
+    </div>
     <div class="min-w-0 flex-1">
       <ULink
         as="button"
@@ -50,7 +53,7 @@ async function toggle(): Promise<void> {
       >
         {{ todo.title }}
       </ULink>
-      <p v-if="firstLine" class="truncate text-xs text-muted">{{ firstLine }}</p>
+      <TodoDescription v-if="todo.description.trim()" :markdown="todo.description" class="mt-0.5" />
     </div>
     <slot name="actions" />
   </li>

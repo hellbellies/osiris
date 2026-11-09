@@ -40,6 +40,7 @@ pub fn run() {
             commands::todos::update_todo,
             commands::todos::set_todo_completed,
             commands::todos::delete_todo,
+            commands::todos::open_todo_link,
             commands::workstreams::list_workstreams,
             commands::workstreams::get_workstream,
             commands::workstreams::create_workstream,

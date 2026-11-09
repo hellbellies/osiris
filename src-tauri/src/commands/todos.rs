@@ -1,4 +1,5 @@
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 
 use super::now_ms;
 use crate::db::Db;
@@ -34,4 +35,11 @@ pub async fn set_todo_completed(db: State<'_, Db>, id: i64, completed: bool) -> 
 #[tauri::command]
 pub async fn delete_todo(db: State<'_, Db>, id: i64) -> AppResult<()> {
     todos::delete(&mut db.lock(), id)
+}
+
+/// Opens a link from a todo description in the default browser or mail app.
+#[tauri::command]
+pub async fn open_todo_link(app: AppHandle, url: String) -> AppResult<()> {
+    app.opener().open_url(todos::link_url(&url)?, None::<&str>)?;
+    Ok(())
 }

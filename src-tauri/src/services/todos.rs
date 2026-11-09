@@ -21,6 +21,18 @@ const FROM: &str = "todos t LEFT JOIN workstream_items w
 /// Open todos first (oldest first, like a queue), then completed ones (most recent first).
 const ORDER: &str = "t.completed_at IS NOT NULL, t.completed_at DESC, t.created_at, t.id";
 
+/// Schemes a link in a todo description may open; anything else (e.g. `file:`) is refused.
+/// Mirrored by `LINK_SCHEMES` in `TodoDescription.vue`.
+const LINK_SCHEMES: [&str; 4] = ["http", "https", "mailto", "obsidian"];
+
+/// Validates a link from a todo description before it is opened in the default handler.
+pub fn link_url(link: &str) -> AppResult<url::Url> {
+    url::Url::parse(link.trim())
+        .ok()
+        .filter(|url| LINK_SCHEMES.contains(&url.scheme()))
+        .ok_or_else(|| AppError::Validation(format!("Cannot open link “{link}”")))
+}
+
 pub fn list(conn: &Connection) -> AppResult<Vec<Todo>> {
     Ok(conn
         .prepare(&format!("SELECT {COLUMNS} FROM {FROM} ORDER BY {ORDER}"))?
@@ -270,5 +282,19 @@ mod tests {
             0
         );
         assert!(delete(&mut conn, todo.id).is_err());
+    }
+
+    #[test]
+    fn link_url_accepts_known_schemes_only() {
+        assert_eq!(
+            link_url(" https://example.com/a?b=1 ").unwrap().as_str(),
+            "https://example.com/a?b=1"
+        );
+        assert!(link_url("http://example.com").is_ok());
+        assert!(link_url("mailto:someone@example.com").is_ok());
+        assert!(link_url("obsidian://open?vault=Notes&file=Meeting%20-%20Plan").is_ok());
+        for link in ["file:///etc/passwd", "javascript:alert(1)", "/relative", "not a url", ""] {
+            assert!(link_url(link).is_err(), "{link}");
+        }
     }
 }
