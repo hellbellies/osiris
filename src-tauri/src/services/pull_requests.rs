@@ -7,10 +7,11 @@
 //! longer listed), plus pull requests in any state that mention a cached Jira
 //! issue's key (searched in the same repositories). Anything else is pruned.
 //!
-//! Every sync is a full one: the user's open pull requests are few, so two or
-//! three GraphQL requests replace the need for delta tracking. The exception are
-//! Jira mentions: done issues are searched one last time, then keep their links
-//! (refreshed by id), so a sync searches only for active issues.
+//! [`sync`] (the pull requests page's Fetch) covers the listed pull requests and
+//! workstream items: the user's open pull requests are few, so a full fetch of a
+//! few GraphQL requests replaces the need for delta tracking. [`sync_mentions`]
+//! runs with each Jira sync: done issues are searched one last time, then keep
+//! their links (refreshed by id), so it searches only for active issues.
 
 use std::collections::{HashMap, HashSet};
 
@@ -173,8 +174,8 @@ pub fn prune_unlinked(conn: &Connection) -> AppResult<usize> {
 }
 
 /// Fetches open pull requests the user authored or must review (optionally limited
-/// to `repositories`), the other open ones in the watched repositories, the ones
-/// mentioning cached Jira issues, and refreshes workstream-linked ones.
+/// to `repositories`) and the other open ones in the watched repositories, and
+/// refreshes workstream-linked ones. Jira mentions are left to [`sync_mentions`].
 pub async fn sync(
     db: &Db,
     client: &GitHubClient,
@@ -228,20 +229,40 @@ pub async fn sync(
         }
     }
 
-    // Pull requests mentioning Jira issues, in any state. Without configured
-    // repositories, keep searching where earlier mentions were found, so they don't
-    // vanish once the user has no open pull request left in that repository.
-    let mut mention_scope = watched;
-    if repositories.is_empty() {
-        mention_scope.extend(
-            mentioned_repositories(&db.lock())?
-                .into_iter()
-                .map(|repo| format!("repo:{repo}")),
-        );
-        mention_scope.sort();
-        mention_scope.dedup();
-    }
-    let searched: Vec<IssueToSearch> = issues_to_search(&db.lock(), &scope)?
+    let linked: Vec<String> = workstream_ids(&db.lock())?
+        .into_iter()
+        .filter(|id| !mine.contains_key(id) && !other_open.contains_key(id))
+        .collect();
+    let linked = client.pull_requests_by_id(&linked).await?;
+
+    let mine: Vec<PullRequest> = mine.into_values().collect();
+    let other_open: Vec<PullRequest> = other_open.into_values().collect();
+    apply_open(&mut db.lock(), &mine, &other_open, &linked, now_ms)
+}
+
+/// Searches pull requests, in any state, that mention a cached Jira issue's key, and
+/// refreshes by id the ones already linked to issues that weren't searched. Runs
+/// after each Jira sync. Done issues already searched while done in the same
+/// configured scope keep their links, unless `all` is set.
+///
+/// Searches the watched repositories: the configured ones, or else those of the
+/// user's listed pull requests and of earlier mentions (so these don't vanish once
+/// the user has no open pull request left in that repository).
+pub async fn sync_mentions(
+    db: &Db,
+    client: &GitHubClient,
+    repositories: &[String],
+    all: bool,
+) -> AppResult<()> {
+    let scope = search_scope(repositories);
+    let watched = if repositories.is_empty() {
+        (watched_repositories(&db.lock())?.into_iter())
+            .map(|repo| format!("repo:{repo}"))
+            .collect()
+    } else {
+        scope_qualifiers(repositories)
+    };
+    let searched: Vec<IssueToSearch> = issues_to_search(&db.lock(), &scope, all)?
         .into_iter()
         .filter(|issue| is_issue_key(&issue.key))
         .collect();
@@ -253,7 +274,7 @@ pub async fn sync(
             .map(|issue| format!("\"{}\"", issue.key))
             .collect();
         let base = format!("is:pr {}", terms.join(" OR "));
-        for query in batched_queries(&base, &mention_scope) {
+        for query in batched_queries(&base, &watched) {
             for (pr, text) in client.search_pull_requests_with_text(&query).await? {
                 let mut mentioned = false;
                 for IssueToSearch {
@@ -265,43 +286,34 @@ pub async fn sync(
                         mentioned = true;
                     }
                 }
-                if mentioned && !mine.contains_key(&pr.id) && !other_open.contains_key(&pr.id) {
+                if mentioned {
                     mentioning.insert(pr.id.clone(), pr);
                 }
             }
         }
     }
 
-    // Refresh by id what no search returned: workstream items, and the pull requests of
-    // issues that weren't searched (their links are kept, but merges should show).
-    let linked: Vec<String> = linked_ids(&db.lock())?
+    // Issues that weren't searched keep their links, but merges should still show.
+    let linked: Vec<String> = jira_linked_ids(&db.lock())?
         .into_iter()
-        .filter(|id| {
-            !mine.contains_key(id) && !other_open.contains_key(id) && !mentioning.contains_key(id)
-        })
+        .filter(|id| !mentioning.contains_key(id))
         .collect();
-    let linked = client.pull_requests_by_id(&linked).await?;
+    let mut fetched: Vec<PullRequest> = mentioning.into_values().collect();
+    fetched.extend(client.pull_requests_by_id(&linked).await?);
 
-    let fetched = Fetched {
-        mine: mine.into_values().collect(),
-        other_open: other_open.into_values().collect(),
-        mentioning: mentioning.into_values().collect(),
-        linked,
+    let found = Mentions {
+        pull_requests: fetched,
         mentions,
         searched,
         scope,
     };
-    apply(&mut db.lock(), &fetched, now_ms)
+    apply_mentions(&mut db.lock(), &found)
 }
 
-/// Everything one sync fetched from GitHub.
-struct Fetched {
-    mine: Vec<PullRequest>,
-    other_open: Vec<PullRequest>,
-    /// Pull requests mentioning a Jira issue that aren't in `mine` or `other_open`.
-    mentioning: Vec<PullRequest>,
-    /// Workstream-linked pull requests not found by any search, refreshed by id.
-    linked: Vec<PullRequest>,
+/// Everything one [`sync_mentions`] fetched from GitHub.
+struct Mentions {
+    /// Pull requests mentioning a searched issue, and refreshed linked ones.
+    pull_requests: Vec<PullRequest>,
     /// `(Jira issue id, pull request id)` pairs found for the `searched` issues.
     mentions: Vec<(String, String)>,
     /// Jira issues whose mentions were searched; the others keep their links.
@@ -318,21 +330,21 @@ struct IssueToSearch {
     category: String,
 }
 
-/// Jira issues to search mentions for: all except done ones already searched while
-/// done in the same configured repository `scope`. Pull requests rarely start
-/// mentioning an issue after it is done, so this keeps a sync to a few searches.
-fn issues_to_search(conn: &Connection, scope: &str) -> AppResult<Vec<IssueToSearch>> {
+/// Jira issues to search mentions for: all with `all`, else all except done ones
+/// already searched while done in the same configured repository `scope`. Pull
+/// requests rarely start mentioning an issue after it is done.
+fn issues_to_search(conn: &Connection, scope: &str, all: bool) -> AppResult<Vec<IssueToSearch>> {
     Ok(conn
         .prepare(
             "SELECT i.id, i.key, coalesce(s.category, '') FROM jira_issues i
              LEFT JOIN jira_project_statuses s
                  ON s.project_key = i.project_key AND s.status_id = i.status_id
              LEFT JOIN jira_issue_pull_request_searches m ON m.issue_id = i.id
-             WHERE coalesce(s.category, '') <> 'done'
+             WHERE ?2 OR coalesce(s.category, '') <> 'done'
                  OR m.category IS NOT 'done' OR m.scope IS NOT ?1
              ORDER BY i.key",
         )?
-        .query_map([scope], |row| {
+        .query_map(params![scope, all], |row| {
             Ok(IssueToSearch {
                 id: row.get(0)?,
                 key: row.get(1)?,
@@ -388,8 +400,55 @@ fn batched_queries(base: &str, qualifiers: &[String]) -> Vec<String> {
     queries
 }
 
-/// Writes a sync in one transaction, so a failure leaves the previous data intact.
-fn apply(conn: &mut Connection, fetched: &Fetched, now_ms: i64) -> AppResult<GitHubSyncSummary> {
+/// Columns set from a fetched pull request, except why it is listed.
+const DETAIL_COLUMNS: &str = "number = excluded.number, title = excluded.title,
+     url = excluded.url, repository = excluded.repository, author = excluded.author,
+     state = excluded.state, is_draft = excluded.is_draft,
+     review_decision = excluded.review_decision, updated_at = excluded.updated_at";
+
+/// Inserts or updates pull requests; with `listing`, also why they are listed.
+fn upsert(tx: &Connection, pull_requests: &[&PullRequest], listing: bool) -> AppResult<()> {
+    let listing_columns = if listing {
+        ", authored_by_me = excluded.authored_by_me,
+         review_requested = excluded.review_requested, other_open = excluded.other_open"
+    } else {
+        ""
+    };
+    let mut upsert = tx.prepare(&format!(
+        "INSERT INTO github_pull_requests
+             (id, number, title, url, repository, author, state, is_draft,
+              review_decision, updated_at, authored_by_me, review_requested, other_open)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         ON CONFLICT(id) DO UPDATE SET {DETAIL_COLUMNS}{listing_columns}"
+    ))?;
+    for pr in pull_requests {
+        upsert.execute(params![
+            pr.id,
+            pr.number,
+            pr.title,
+            pr.url,
+            pr.repository,
+            pr.author,
+            state_to_db(pr.state),
+            pr.is_draft,
+            pr.review_decision.map(review_decision_to_db),
+            pr.updated_at,
+            pr.authored_by_me,
+            pr.review_requested,
+            pr.other_open
+        ])?;
+    }
+    Ok(())
+}
+
+/// Writes a [`sync`] in one transaction, so a failure leaves the previous data intact.
+fn apply_open(
+    conn: &mut Connection,
+    mine: &[PullRequest],
+    other_open: &[PullRequest],
+    linked: &[PullRequest],
+    now_ms: i64,
+) -> AppResult<GitHubSyncSummary> {
     let tx = conn.transaction()?;
     let before = involved_ids(&tx)?;
     // Whatever this sync doesn't list is no longer listed.
@@ -398,43 +457,28 @@ fn apply(conn: &mut Connection, fetched: &Fetched, now_ms: i64) -> AppResult<Git
          SET authored_by_me = 0, review_requested = 0, other_open = 0",
         [],
     )?;
-    {
-        let mut upsert = tx.prepare(
-            "INSERT INTO github_pull_requests
-                 (id, number, title, url, repository, author, state, is_draft,
-                  review_decision, updated_at, authored_by_me, review_requested, other_open)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-             ON CONFLICT(id) DO UPDATE SET
-                 number = excluded.number, title = excluded.title, url = excluded.url,
-                 repository = excluded.repository, author = excluded.author,
-                 state = excluded.state, is_draft = excluded.is_draft,
-                 review_decision = excluded.review_decision, updated_at = excluded.updated_at,
-                 authored_by_me = excluded.authored_by_me,
-                 review_requested = excluded.review_requested,
-                 other_open = excluded.other_open",
-        )?;
-        let all = (fetched.mine.iter())
-            .chain(&fetched.other_open)
-            .chain(&fetched.mentioning)
-            .chain(&fetched.linked);
-        for pr in all {
-            upsert.execute(params![
-                pr.id,
-                pr.number,
-                pr.title,
-                pr.url,
-                pr.repository,
-                pr.author,
-                state_to_db(pr.state),
-                pr.is_draft,
-                pr.review_decision.map(review_decision_to_db),
-                pr.updated_at,
-                pr.authored_by_me,
-                pr.review_requested,
-                pr.other_open
-            ])?;
-        }
-    }
+    let all: Vec<&PullRequest> = mine.iter().chain(other_open).chain(linked).collect();
+    upsert(&tx, &all, true)?;
+    prune_unlinked(&tx)?;
+    let after = involved_ids(&tx)?;
+    tx.execute(
+        "INSERT INTO github_sync_state (id, last_synced_at) VALUES (1, ?1)
+         ON CONFLICT(id) DO UPDATE SET last_synced_at = excluded.last_synced_at",
+        [now_ms],
+    )?;
+    tx.commit()?;
+    Ok(GitHubSyncSummary {
+        fetched: mine.len(),
+        removed: before.difference(&after).count(),
+        others: other_open.len(),
+    })
+}
+
+/// Writes a [`sync_mentions`] in one transaction. Leaves why pull requests are listed
+/// to [`sync`].
+fn apply_mentions(conn: &mut Connection, found: &Mentions) -> AppResult<()> {
+    let tx = conn.transaction()?;
+    upsert(&tx, &found.pull_requests.iter().collect::<Vec<_>>(), false)?;
     {
         // Searched issues get their links replaced and are marked as searched.
         let mut unlink = tx.prepare("DELETE FROM jira_issue_pull_requests WHERE issue_id = ?1")?;
@@ -445,51 +489,47 @@ fn apply(conn: &mut Connection, fetched: &Fetched, now_ms: i64) -> AppResult<Git
              ON CONFLICT(issue_id) DO UPDATE SET
                  category = excluded.category, scope = excluded.scope",
         )?;
-        for issue in &fetched.searched {
+        for issue in &found.searched {
             unlink.execute([&issue.id])?;
-            mark.execute(params![issue.id, issue.category, fetched.scope])?;
+            mark.execute(params![issue.id, issue.category, found.scope])?;
         }
         let mut link = tx.prepare(
             "INSERT OR IGNORE INTO jira_issue_pull_requests (issue_id, pull_request_id)
              SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM jira_issues WHERE id = ?1)",
         )?;
-        for (issue_id, pull_request_id) in &fetched.mentions {
+        for (issue_id, pull_request_id) in &found.mentions {
             link.execute(params![issue_id, pull_request_id])?;
         }
     }
     prune_unlinked(&tx)?;
-    let after = involved_ids(&tx)?;
-    tx.execute(
-        "INSERT INTO github_sync_state (id, last_synced_at) VALUES (1, ?1)
-         ON CONFLICT(id) DO UPDATE SET last_synced_at = excluded.last_synced_at",
-        [now_ms],
-    )?;
     tx.commit()?;
-    Ok(GitHubSyncSummary {
-        fetched: fetched.mine.len(),
-        removed: before.difference(&after).count(),
-        others: fetched.other_open.len(),
-    })
+    Ok(())
 }
 
-/// Pull requests linked to a workstream or a Jira issue.
-fn linked_ids(conn: &Connection) -> AppResult<Vec<String>> {
+fn workstream_ids(conn: &Connection) -> AppResult<Vec<String>> {
     Ok(conn
-        .prepare(
-            "SELECT item_id FROM workstream_items WHERE item_type = 'github_pr'
-             UNION SELECT pull_request_id FROM jira_issue_pull_requests",
-        )?
+        .prepare("SELECT item_id FROM workstream_items WHERE item_type = 'github_pr'")?
         .query_map([], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?)
 }
 
-/// Repositories of the pull requests currently linked to Jira issues.
-fn mentioned_repositories(conn: &Connection) -> AppResult<Vec<String>> {
+fn jira_linked_ids(conn: &Connection) -> AppResult<Vec<String>> {
     Ok(conn
-        .prepare(
-            "SELECT DISTINCT p.repository FROM jira_issue_pull_requests l
-             JOIN github_pull_requests p ON p.id = l.pull_request_id",
-        )?
+        .prepare("SELECT DISTINCT pull_request_id FROM jira_issue_pull_requests")?
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Repositories of the user's listed pull requests and of those linked to Jira issues.
+fn watched_repositories(conn: &Connection) -> AppResult<Vec<String>> {
+    Ok(conn
+        .prepare(&format!(
+            "SELECT p.repository FROM github_pull_requests p WHERE {INVOLVES_ME}
+             UNION
+             SELECT p.repository FROM jira_issue_pull_requests l
+             JOIN github_pull_requests p ON p.id = l.pull_request_id
+             ORDER BY 1"
+        ))?
         .query_map([], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?)
 }
@@ -812,6 +852,7 @@ mod tests {
         )
         .await;
         sync(&db, &github, &[], NOW).await.unwrap();
+        sync_mentions(&db, &github, &[], false).await.unwrap();
         assert_eq!(
             mentioned(&db),
             [
@@ -831,6 +872,7 @@ mod tests {
         )
         .await;
         sync(&db, &github, &[], NOW + 1).await.unwrap();
+        sync_mentions(&db, &github, &[], false).await.unwrap();
         assert_eq!(
             mentioned(&db),
             [("1".into(), "PR_5".into(), PullRequestState::Merged)]
@@ -840,6 +882,7 @@ mod tests {
         mock_github(&mut server, &[], &[], &[]).await;
         mock_mentions(&mut server, &[]).await;
         sync(&db, &github, &[], NOW + 2).await.unwrap();
+        sync_mentions(&db, &github, &[], false).await.unwrap();
         assert!(mentioned(&db).is_empty());
         assert!(!exists(&db.lock(), "PR_5").unwrap());
     }
@@ -872,6 +915,7 @@ mod tests {
         )
         .await;
         sync(&db, &github, &[], NOW).await.unwrap();
+        sync_mentions(&db, &github, &[], false).await.unwrap();
 
         // Second sync: only the active FOO-2 is searched; the done FOO-1 keeps its
         // pull request, refreshed by id (it was merged in the meantime).
@@ -889,6 +933,7 @@ mod tests {
             .create_async()
             .await;
         sync(&db, &github, &[], NOW + 1).await.unwrap();
+        sync_mentions(&db, &github, &[], false).await.unwrap();
         done_search.assert_async().await;
         assert_eq!(
             mentioned(&db),
@@ -907,8 +952,24 @@ mod tests {
         sync(&db, &github, &["acme/app".into()], NOW + 2)
             .await
             .unwrap();
+        sync_mentions(&db, &github, &["acme/app".into()], false)
+            .await
+            .unwrap();
         done_search.assert_async().await;
         assert!(mentioned(&db).is_empty());
+
+        // A full Jira refresh searches done issues again.
+        let done_search = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Regex("headRefName.*FOO-1".into()))
+            .with_body(search_page(&[], None))
+            .expect(1)
+            .create_async()
+            .await;
+        sync_mentions(&db, &github, &["acme/app".into()], true)
+            .await
+            .unwrap();
+        done_search.assert_async().await;
     }
 
     #[tokio::test]
@@ -932,6 +993,27 @@ mod tests {
         assert!(refresh(&db, &github, "PR_9").await.is_err());
         mock_github(&mut server, &[], &[], &[]).await;
         assert!(refresh(&db, &github, "PR_1").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn pull_request_sync_does_not_search_jira_mentions() {
+        let mut server = Server::new_async().await;
+        let db = Db::new(db::open_in_memory());
+        db.lock()
+            .execute(
+                "INSERT INTO jira_issues (id, key, summary, updated) VALUES ('1', 'FOO-1', 'S', '')",
+                [],
+            )
+            .unwrap();
+        mock_github(&mut server, &[pr_json("PR_1", 1, "OPEN")], &[], &[]).await;
+        let mention_search = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Regex("headRefName".into()))
+            .expect(0)
+            .create_async()
+            .await;
+        sync(&db, &client(&server.url()), &[], NOW).await.unwrap();
+        mention_search.assert_async().await;
     }
 
     #[test]

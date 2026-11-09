@@ -50,6 +50,8 @@ osiris signs in with your Atlassian account email plus an API token.
    - **Projects**: comma-separated project keys, e.g. `FOO, BAR` (the `FOO` in `FOO-123`)
    - **API token**: the token from step 3
 
+osiris keeps only issues assigned to you that are not done; an issue that is done (or reassigned) disappears from the list, unless it is in a workstream.
+
 The token has the same permissions as your account, so osiris sees exactly the issues you can see in Jira. Self-hosted Jira (Server/Data Center) is not supported yet.
 
 ### GitHub
@@ -86,7 +88,9 @@ Under **Settings → GitHub**, paste the token and click **Test connection** —
 
 **Other open pull requests** lists everyone else's open pull requests in the configured **Repositories**. While that field is empty, it covers the repositories your own and review-requested pull requests are in.
 
-Jira issues show the pull requests that mention their key (e.g. `FOO-123`) in the title or description, whether open, merged or closed, as badges that open the pull request on GitHub. osiris finds them with GitHub search on **Fetch** in the same repositories; Jira's own development information is not used. To keep **Fetch** quick, issues in a done status are searched one last time and then keep the pull requests found so far (their state still updates); a pull request that first mentions an issue after it is done does not show up. Changing **Repositories** searches done issues once more.
+Jira issues show the pull requests that mention their key (e.g. `FOO-123`) in the title or description, whether open, merged or closed, as badges that open the pull request on GitHub. osiris finds them with GitHub search when you **Fetch** on the **Jira issues** page (the pull requests page's **Fetch** only covers open pull requests), in the configured **Repositories**, or else in the repositories of your own pull requests as of the last pull request **Fetch**. Jira's own development information is not used. If GitHub can't be reached, the Jira issues are still updated and a warning says so.
+
+Done issues in a workstream are searched one last time and then keep the pull requests found so far (their state still updates); **Full refresh** or changing **Repositories** searches them again.
 
 GitHub Enterprise Server is not supported yet.
 

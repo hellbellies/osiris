@@ -8,6 +8,11 @@ import JiraIssueRow from "./JiraIssueRow.vue";
 import JiraStatusFilter from "./JiraStatusFilter.vue";
 import type { JiraIssue, JiraSyncSummary } from "@/types";
 
+const emit = defineEmits<{
+  /** A fetch finished; related data (e.g. pull request badges) may have changed. */
+  synced: [];
+}>();
+
 defineSlots<{
   /** Related items shown after each row's summary. */
   related?(props: { issue: JiraIssue }): unknown;
@@ -44,7 +49,17 @@ const projects = computed(() => {
 
 async function sync(full: boolean): Promise<void> {
   const summary = await store.sync(full);
-  if (summary) toast.add({ title: describe(summary), icon: "i-lucide-refresh-cw", color: "success" });
+  if (!summary) return;
+  toast.add({ title: describe(summary), icon: "i-lucide-refresh-cw", color: "success" });
+  if (summary.pullRequestError) {
+    toast.add({
+      title: "Related pull requests not updated",
+      description: summary.pullRequestError,
+      icon: "i-lucide-triangle-alert",
+      color: "warning",
+    });
+  }
+  emit("synced");
 }
 
 function describe(summary: JiraSyncSummary): string {

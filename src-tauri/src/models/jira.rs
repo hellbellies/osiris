@@ -90,8 +90,11 @@ pub struct JiraSyncSummary {
     pub mode: JiraSyncMode,
     /// Issues inserted or updated.
     pub upserted: usize,
-    /// Issues removed because they are no longer assigned to the user.
+    /// Issues removed because they are no longer assigned to the user (or done).
     pub removed: usize,
+    /// Why the related pull requests (searched after the issues were saved) could not
+    /// be updated; `None` when they were, or when no GitHub token is set up.
+    pub pull_request_error: Option<String>,
 }
 
 /// A status available in a project. Mirrored by `JiraProjectStatus` in `src/types/jira.ts`.

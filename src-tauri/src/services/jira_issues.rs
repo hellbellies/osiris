@@ -1,13 +1,13 @@
 //! Local cache of Jira issues and the full/delta sync that fills it.
 //!
-//! The cache holds the issues assigned to the user plus issues that belong to a
-//! workstream (kept with `assigned_to_me = 0` after being reassigned). Unlinked
-//! issues that are no longer assigned are pruned.
+//! The cache holds the issues assigned to the user that aren't done, plus issues
+//! that belong to a workstream (kept with `assigned_to_me = 0` after being
+//! reassigned or done). Unlinked issues that are no longer assigned are pruned.
 //!
-//! A full sync re-fetches all assigned issues and every workstream-linked issue.
-//! A delta sync asks Jira only for issues in the configured projects updated since
-//! the last sync (relative JQL, so time zones don't matter), split into those
-//! assigned to the user and those that are not.
+//! A full sync re-fetches all assigned, not done issues and every workstream-linked
+//! issue. A delta sync asks Jira only for issues in the configured projects updated
+//! since the last sync (relative JQL, so time zones don't matter), split into those
+//! assigned to the user and not done, and the rest.
 //!
 //! Issues deleted in Jira are only noticed by a full sync.
 //!
@@ -25,6 +25,9 @@ use crate::models::jira::{
     JiraSyncSummary,
 };
 use crate::services::jira_client::JiraClient;
+
+/// JQL for the issues the user works on: assigned to them and not done.
+const MINE: &str = "assignee = currentUser() AND statusCategory != Done";
 
 /// Extra minutes added to the delta window to absorb clock skew and search-index lag.
 const DELTA_MARGIN_MINUTES: i64 = 5;
@@ -147,7 +150,7 @@ pub async fn sync(
 
     let (mode, mine, others) = match plan(state.as_ref(), &scope, force_full, now_ms) {
         SyncPlan::Full => {
-            let jql = format!("{projects} AND assignee = currentUser() ORDER BY updated DESC");
+            let jql = format!("{projects} AND {MINE} ORDER BY updated DESC");
             let mine = client.search(&jql).await?;
             // Refresh linked issues that are no longer (or never were) assigned to the user,
             // wherever they live. Ids come from Jira, but keep only numeric ones for safe JQL.
@@ -166,12 +169,12 @@ pub async fn sync(
         }
         SyncPlan::Delta { minutes } => {
             let changed = format!("{projects} AND updated >= \"-{minutes}m\"");
-            let mine = client
-                .search(&format!("{changed} AND assignee = currentUser()"))
-                .await?;
+            let mine = client.search(&format!("{changed} AND {MINE}")).await?;
+            // `!=` never matches an empty field, so unassigned issues are asked for explicitly.
             let others = client
                 .search(&format!(
-                    "{changed} AND (assignee != currentUser() OR assignee IS EMPTY)"
+                    "{changed} AND (assignee != currentUser() OR assignee IS EMPTY \
+                     OR statusCategory = Done)"
                 ))
                 .await?;
             (JiraSyncMode::Delta, mine, others)
@@ -193,11 +196,13 @@ pub async fn sync(
 }
 
 /// Statuses of the synced projects plus the user's selection.
-/// Selected statuses that no longer exist in a project are left out.
+/// Done statuses are left out (done issues aren't kept, except in workstreams), as are
+/// selected statuses that no longer exist in a project.
 pub fn status_filter(conn: &Connection) -> AppResult<JiraStatusFilter> {
     let options = conn
         .prepare(
             "SELECT project_key, status_id, name, category FROM jira_project_statuses
+             WHERE category <> 'done'
              ORDER BY project_key,
                       CASE category WHEN 'new' THEN 0 WHEN 'indeterminate' THEN 1
                                     WHEN 'done' THEN 2 ELSE 3 END,
@@ -216,6 +221,7 @@ pub fn status_filter(conn: &Connection) -> AppResult<JiraStatusFilter> {
         .prepare(
             "SELECT project_key, status_id FROM jira_status_filter
              JOIN jira_project_statuses USING (project_key, status_id)
+             WHERE category <> 'done'
              ORDER BY project_key, status_id",
         )?
         .query_map([], |row| {
@@ -346,10 +352,6 @@ fn apply(
             ])?;
         }
     }
-    prune_unlinked(&tx)?;
-    // "Removed" from the user's point of view: no longer in their list of assigned issues.
-    let assigned_after = assigned_ids(&tx)?;
-    let removed = assigned_before.difference(&assigned_after).count();
     // Statuses are always fetched in full, so replace them wholesale.
     tx.execute("DELETE FROM jira_project_statuses", [])?;
     {
@@ -366,6 +368,18 @@ fn apply(
             ])?;
         }
     }
+    // Done issues leave the list, also ones cached before done issues were skipped;
+    // pruning then keeps only those in a workstream.
+    tx.execute(
+        "UPDATE jira_issues SET assigned_to_me = 0
+         WHERE (project_key, status_id) IN
+             (SELECT project_key, status_id FROM jira_project_statuses WHERE category = 'done')",
+        [],
+    )?;
+    prune_unlinked(&tx)?;
+    // "Removed" from the user's point of view: no longer in their list of assigned issues.
+    let assigned_after = assigned_ids(&tx)?;
+    let removed = assigned_before.difference(&assigned_after).count();
     tx.execute(
         "INSERT INTO jira_sync_state (id, scope, last_synced_at) VALUES (1, ?1, ?2)
          ON CONFLICT(id) DO UPDATE SET scope = excluded.scope, last_synced_at = excluded.last_synced_at",
@@ -376,6 +390,7 @@ fn apply(
         mode: result.mode,
         upserted: result.mine.len(),
         removed,
+        pull_request_error: None,
     })
 }
 
@@ -505,7 +520,7 @@ mod tests {
 
         let full = mock_search(
             &mut server,
-            "assignee = currentUser() ORDER BY",
+            "statusCategory != Done ORDER BY",
             page(&[
                 issue_json("1", "FOO-1", "One"),
                 issue_json("2", "FOO-2", "Two"),
@@ -544,7 +559,8 @@ mod tests {
             JiraSyncSummary {
                 mode: JiraSyncMode::Delta,
                 upserted: 2,
-                removed: 1
+                removed: 1,
+                pull_request_error: None,
             }
         );
         mine.assert_async().await;
@@ -646,7 +662,8 @@ mod tests {
         );
         let filter = status_filter(&db.lock()).unwrap();
         let names: Vec<_> = filter.options.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, ["To Do", "In Progress", "Done"]);
+        // Done statuses can't match any listed issue.
+        assert_eq!(names, ["To Do", "In Progress"]);
         assert!(filter.selected.is_empty());
     }
 
@@ -666,13 +683,13 @@ mod tests {
             &[status("BAR", "5"), status("FOO", "3"), status("FOO", "99")],
         )
         .unwrap();
-        assert_eq!(filter.selected, [status("BAR", "5"), status("FOO", "3")]);
+        assert_eq!(filter.selected, [status("FOO", "3")]);
         let project_order: Vec<_> = filter
             .options
             .iter()
             .map(|s| s.project_key.as_str())
             .collect();
-        assert_eq!(project_order, ["BAR", "BAR", "FOO"]);
+        assert_eq!(project_order, ["BAR", "FOO"]);
 
         // Replacing, not appending.
         let filter = set_status_filter(&mut conn, &[status("BAR", "3")]).unwrap();
@@ -697,6 +714,56 @@ mod tests {
         };
         workstreams::set_item_workstream(&mut conn, &item, Some(workstream.id), NOW).unwrap();
         workstream.id
+    }
+
+    #[tokio::test]
+    async fn done_issues_are_dropped_unless_in_a_workstream() {
+        let mut server = Server::new_async().await;
+        mock_statuses(&mut server).await;
+        let db = Db::new(db::open_in_memory());
+        let client = client(&server.url());
+        let projects = keys(&["FOO"]);
+        let done = |id: &str, key: &str| {
+            issue_json(id, key, "S").replace(
+                r#""id":"3","name":"In Progress""#,
+                r#""id":"5","name":"Done""#,
+            )
+        };
+
+        let full = mock_search(
+            &mut server,
+            "statusCategory != Done ORDER BY",
+            page(&[issue_json("1", "FOO-1", "S"), issue_json("2", "FOO-2", "S")]),
+        )
+        .await;
+        sync(&db, &client, &projects, false, NOW).await.unwrap();
+        full.assert_async().await;
+        let workstream_id = link_to_workstream(&db, "2");
+
+        // Both are done now; the delta lists them as no longer the user's.
+        server.reset();
+        mock_statuses(&mut server).await;
+        mock_search(&mut server, "statusCategory != Done", page(&[])).await;
+        mock_search(
+            &mut server,
+            "OR statusCategory = Done",
+            page(&[done("1", "FOO-1"), done("2", "FOO-2")]),
+        )
+        .await;
+        let summary = sync(&db, &client, &projects, false, NOW + 60_000)
+            .await
+            .unwrap();
+        assert_eq!(summary.removed, 2);
+        assert!(list(&db.lock()).unwrap().issues.is_empty());
+        assert!(!exists(&db.lock(), "1").unwrap());
+        let workstream = list_for_workstream(&db.lock(), workstream_id).unwrap();
+        assert_eq!(
+            (
+                workstream[0].key.as_str(),
+                workstream[0].status_name.as_str()
+            ),
+            ("FOO-2", "Done")
+        );
     }
 
     #[tokio::test]
