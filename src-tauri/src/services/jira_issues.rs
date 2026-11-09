@@ -92,14 +92,6 @@ pub fn search(conn: &Connection, term: &str, limit: i64) -> AppResult<Vec<JiraIs
         .collect::<Result<Vec<_>, _>>()?)
 }
 
-/// Id and key of every cached issue.
-pub fn keys(conn: &Connection) -> AppResult<Vec<(String, String)>> {
-    Ok(conn
-        .prepare("SELECT id, key FROM jira_issues ORDER BY key")?
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<Result<Vec<_>, _>>()?)
-}
-
 /// Whether an issue with this id is cached.
 pub fn exists(conn: &Connection, id: &str) -> AppResult<bool> {
     Ok(conn

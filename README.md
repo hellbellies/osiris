@@ -86,7 +86,7 @@ Under **Settings → GitHub**, paste the token and click **Test connection** —
 
 **Other open pull requests** lists everyone else's open pull requests in the configured **Repositories**. While that field is empty, it covers the repositories your own and review-requested pull requests are in.
 
-Jira issues show the pull requests that mention their key (e.g. `FOO-123`) in the title or description, whether open, merged or closed, as badges that open the pull request on GitHub. osiris finds them with GitHub search on **Fetch** in the same repositories; Jira's own development information is not used.
+Jira issues show the pull requests that mention their key (e.g. `FOO-123`) in the title or description, whether open, merged or closed, as badges that open the pull request on GitHub. osiris finds them with GitHub search on **Fetch** in the same repositories; Jira's own development information is not used. To keep **Fetch** quick, issues in a done status are searched one last time and then keep the pull requests found so far (their state still updates); a pull request that first mentions an issue after it is done does not show up. Changing **Repositories** searches done issues once more.
 
 GitHub Enterprise Server is not supported yet.
 

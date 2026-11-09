@@ -293,7 +293,13 @@ mod tests {
         assert!(link_url("http://example.com").is_ok());
         assert!(link_url("mailto:someone@example.com").is_ok());
         assert!(link_url("obsidian://open?vault=Notes&file=Meeting%20-%20Plan").is_ok());
-        for link in ["file:///etc/passwd", "javascript:alert(1)", "/relative", "not a url", ""] {
+        for link in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "/relative",
+            "not a url",
+            "",
+        ] {
             assert!(link_url(link).is_err(), "{link}");
         }
     }
