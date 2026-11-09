@@ -51,6 +51,21 @@ export const usePullRequestsStore = defineStore("pullRequests", () => {
     }
   }
 
+  /**
+   * Re-fetches one pull request from GitHub and updates every local copy.
+   * Rejects with an `AppError` so the row can show the message.
+   */
+  async function refresh(id: string): Promise<PullRequest> {
+    const updated = await call("refresh_pull_request", { id });
+    const replace = (list: PullRequest[]) => {
+      const index = list.findIndex((candidate) => candidate.id === id);
+      if (index !== -1) list[index] = updated;
+    };
+    replace(pullRequests.value);
+    for (const list of Object.values(byJiraIssue.value)) replace(list);
+    return updated;
+  }
+
   /** Reflects a saved workstream change locally, without reloading. */
   function applyWorkstream(id: string, workstreamId: number | null): void {
     const pullRequest = pullRequests.value.find((candidate) => candidate.id === id);
@@ -74,6 +89,7 @@ export const usePullRequestsStore = defineStore("pullRequests", () => {
     error,
     load,
     sync,
+    refresh,
     applyWorkstream,
     open,
   };

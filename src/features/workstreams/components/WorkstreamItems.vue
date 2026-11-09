@@ -158,7 +158,12 @@ onMounted(() => {
       </template>
 
       <ul v-if="current.pullRequests.length" class="divide-y divide-default">
-        <PullRequestRow v-for="pr in current.pullRequests" :key="pr.id" :pull-request="pr">
+        <PullRequestRow
+          v-for="pr in current.pullRequests"
+          :key="pr.id"
+          :pull-request="pr"
+          @refreshed="store.applyPullRequest"
+        >
           <template #actions>
             <UTooltip text="Remove from workstream">
               <UButton
