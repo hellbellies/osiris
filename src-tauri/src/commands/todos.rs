@@ -40,6 +40,7 @@ pub async fn delete_todo(db: State<'_, Db>, id: i64) -> AppResult<()> {
 /// Opens a link from a todo description in the default browser or mail app.
 #[tauri::command]
 pub async fn open_todo_link(app: AppHandle, url: String) -> AppResult<()> {
-    app.opener().open_url(todos::link_url(&url)?, None::<&str>)?;
+    app.opener()
+        .open_url(todos::link_url(&url)?, None::<&str>)?;
     Ok(())
 }
