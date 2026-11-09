@@ -57,6 +57,11 @@ export const useTodosStore = defineStore("todos", () => {
     todos.value = todos.value.filter((todo) => todo.id !== id);
   }
 
+  /** Opens a link from a description in the default browser or mail app. */
+  async function openLink(url: string): Promise<void> {
+    await call("open_todo_link", { url });
+  }
+
   /** Reflects a saved workstream change locally, without reloading. */
   function applyWorkstream(id: number, workstreamId: number | null): void {
     const todo = todos.value.find((candidate) => candidate.id === id);
@@ -74,6 +79,7 @@ export const useTodosStore = defineStore("todos", () => {
     update,
     setCompleted,
     remove,
+    openLink,
     applyWorkstream,
   };
 });

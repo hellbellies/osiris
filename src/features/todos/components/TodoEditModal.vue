@@ -70,7 +70,7 @@ function remove(): Promise<void> | void {
         <UFormField label="Title" :error="error ?? undefined">
           <UInput v-model="form.title" autofocus placeholder="What needs doing?" class="w-full" />
         </UFormField>
-        <UFormField label="Description" hint="Optional">
+        <UFormField label="Description" hint="Optional · Markdown">
           <UTextarea
             v-model="form.description"
             autoresize
