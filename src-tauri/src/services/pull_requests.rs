@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::db::Db;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::github::{
     GitHubSyncSummary, JiraIssuePullRequest, PullRequest, PullRequestList, PullRequestState,
     ReviewDecision,
@@ -85,6 +85,50 @@ pub fn search(conn: &Connection, term: &str, limit: i64) -> AppResult<Vec<PullRe
 
 pub fn exists(conn: &Connection, id: &str) -> AppResult<bool> {
     Ok(url(conn, id)?.is_some())
+}
+
+/// A cached pull request.
+pub fn get(conn: &Connection, id: &str) -> AppResult<Option<PullRequest>> {
+    Ok(conn
+        .query_row(
+            &format!("SELECT {COLUMNS} FROM {FROM} WHERE p.id = ?1"),
+            [id],
+            pull_request_from_row,
+        )
+        .optional()?)
+}
+
+/// Re-fetches one cached pull request by id and updates its details (state, title,
+/// review decision, …). Why it is listed stays as the last sync determined.
+pub async fn refresh(db: &Db, client: &GitHubClient, id: &str) -> AppResult<PullRequest> {
+    let gone = || AppError::Validation("This pull request is no longer available".into());
+    if !exists(&db.lock(), id)? {
+        return Err(gone());
+    }
+    let pr = (client.pull_requests_by_id(&[id.to_owned()]).await?)
+        .into_iter()
+        .next()
+        .ok_or_else(gone)?;
+    let conn = db.lock();
+    conn.execute(
+        "UPDATE github_pull_requests
+         SET number = ?2, title = ?3, url = ?4, repository = ?5, author = ?6, state = ?7,
+             is_draft = ?8, review_decision = ?9, updated_at = ?10
+         WHERE id = ?1",
+        params![
+            pr.id,
+            pr.number,
+            pr.title,
+            pr.url,
+            pr.repository,
+            pr.author,
+            state_to_db(pr.state),
+            pr.is_draft,
+            pr.review_decision.map(review_decision_to_db),
+            pr.updated_at
+        ],
+    )?;
+    get(&conn, id)?.ok_or_else(gone)
 }
 
 /// Pull requests mentioning each cached Jira issue, whatever their state,
@@ -865,6 +909,29 @@ mod tests {
             .unwrap();
         done_search.assert_async().await;
         assert!(mentioned(&db).is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_updates_one_pull_request_and_keeps_its_listing() {
+        let mut server = Server::new_async().await;
+        let db = Db::new(db::open_in_memory());
+        let github = client(&server.url());
+        mock_github(&mut server, &[pr_json("PR_1", 1, "OPEN")], &[], &[]).await;
+        sync(&db, &github, &[], NOW).await.unwrap();
+
+        mock_github(&mut server, &[], &[], &[pr_json("PR_1", 1, "MERGED")]).await;
+        let pr = refresh(&db, &github, "PR_1").await.unwrap();
+        assert_eq!(pr.state, PullRequestState::Merged);
+        assert!(pr.authored_by_me);
+        assert_eq!(
+            get(&db.lock(), "PR_1").unwrap().unwrap().state,
+            PullRequestState::Merged
+        );
+
+        // Unknown locally, or no longer on GitHub.
+        assert!(refresh(&db, &github, "PR_9").await.is_err());
+        mock_github(&mut server, &[], &[], &[]).await;
+        assert!(refresh(&db, &github, "PR_1").await.is_err());
     }
 
     #[test]

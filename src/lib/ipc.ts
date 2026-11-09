@@ -13,6 +13,7 @@ import type {
   JiraStatusRef,
   JiraSyncSummary,
   JiraUser,
+  PullRequest,
   PullRequestList,
   Settings,
   Todo,
@@ -48,6 +49,7 @@ interface Commands {
   list_pull_requests: { args: Record<string, never>; result: PullRequestList };
   list_jira_issue_pull_requests: { args: Record<string, never>; result: JiraIssuePullRequest[] };
   sync_pull_requests: { args: Record<string, never>; result: GitHubSyncSummary };
+  refresh_pull_request: { args: { id: string }; result: PullRequest };
   open_pull_request: { args: { id: string }; result: null };
   list_todos: { args: Record<string, never>; result: Todo[] };
   create_todo: { args: { input: TodoInput; workstreamId: number | null }; result: Todo };

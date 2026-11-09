@@ -6,7 +6,7 @@ use crate::db::Db;
 use crate::error::{AppError, AppResult};
 use crate::models::github::{
     GitHubSettings, GitHubSettingsInput, GitHubSyncSummary, GitHubUser, JiraIssuePullRequest,
-    PullRequestList,
+    PullRequest, PullRequestList,
 };
 use crate::services::github_client::GitHubClient;
 use crate::services::secrets::KeyringStore;
@@ -60,6 +60,13 @@ pub async fn sync_pull_requests(app: AppHandle, db: State<'_, Db>) -> AppResult<
     let config = github::load_config(&dir)?;
     let client = GitHubClient::new(github::token(&TOKEN_STORE)?)?;
     pull_requests::sync(&db, &client, &config.repositories, now_ms()).await
+}
+
+/// Re-fetches one cached pull request from GitHub and returns it updated.
+#[tauri::command]
+pub async fn refresh_pull_request(db: State<'_, Db>, id: String) -> AppResult<PullRequest> {
+    let client = GitHubClient::new(github::token(&TOKEN_STORE)?)?;
+    pull_requests::refresh(&db, &client, &id).await
 }
 
 /// Opens a cached pull request in the default browser. The URL comes from the

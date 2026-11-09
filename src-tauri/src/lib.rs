@@ -34,6 +34,7 @@ pub fn run() {
             commands::github::list_pull_requests,
             commands::github::list_jira_issue_pull_requests,
             commands::github::sync_pull_requests,
+            commands::github::refresh_pull_request,
             commands::github::open_pull_request,
             commands::todos::list_todos,
             commands::todos::create_todo,

@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { call } from "@/lib/ipc";
 import type {
   AppError,
+  PullRequest,
   Workstream,
   WorkstreamDetail,
   WorkstreamItemRef,
@@ -86,6 +87,13 @@ export const useWorkstreamsStore = defineStore("workstreams", () => {
     await Promise.all([load(), openId === undefined ? undefined : loadDetail(openId)]);
   }
 
+  /** Reflects a re-fetched pull request in the open workstream, without reloading. */
+  function applyPullRequest(pullRequest: PullRequest): void {
+    const list = current.value?.pullRequests;
+    const index = list?.findIndex((candidate) => candidate.id === pullRequest.id) ?? -1;
+    if (list && index !== -1) list[index] = pullRequest;
+  }
+
   /** Jira issues, pull requests and todos whose text contains `query`, to pick items from. */
   function searchItems(query: string): Promise<WorkstreamItemSearch> {
     return call("search_workstream_items", { query });
@@ -98,6 +106,7 @@ export const useWorkstreamsStore = defineStore("workstreams", () => {
     loaded,
     error,
     current,
+    applyPullRequest,
     currentError,
     load,
     loadDetail,

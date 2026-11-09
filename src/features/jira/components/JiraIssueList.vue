@@ -29,6 +29,19 @@ const toast = useToast();
 
 const lastSyncedAgo = useTimeAgo(computed(() => lastSyncedAt.value ?? 0));
 
+/** Visible issues grouped by project (space), alphabetically; issue order is kept. */
+const projects = computed(() => {
+  const groups = new Map<string, JiraIssue[]>();
+  for (const issue of visibleIssues.value) {
+    const group = groups.get(issue.projectKey);
+    if (group) group.push(issue);
+    else groups.set(issue.projectKey, [issue]);
+  }
+  return [...groups]
+    .map(([key, items]) => ({ key, items }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+});
+
 async function sync(full: boolean): Promise<void> {
   const summary = await store.sync(full);
   if (summary) toast.add({ title: describe(summary), icon: "i-lucide-refresh-cw", color: "success" });
@@ -89,16 +102,25 @@ onMounted(() => void store.load());
       :title="error.message"
     />
 
-    <ul v-if="visibleIssues.length" class="divide-y divide-default">
-      <JiraIssueRow v-for="issue in visibleIssues" :key="issue.id" :issue="issue">
-        <template #related>
-          <slot name="related" :issue="issue" />
-        </template>
-        <template #actions>
-          <slot name="actions" :issue="issue" />
-        </template>
-      </JiraIssueRow>
-    </ul>
+    <div v-if="visibleIssues.length" class="divide-y divide-default">
+      <section v-for="project in projects" :key="project.key">
+        <h3 class="flex items-center gap-2 bg-elevated/50 px-4 py-1.5 text-sm font-medium text-highlighted">
+          <UIcon name="i-lucide-folder-kanban" class="size-4 text-muted" />
+          {{ project.key || "No space" }}
+          <UBadge color="neutral" variant="subtle" size="sm" :label="project.items.length" />
+        </h3>
+        <ul class="divide-y divide-default border-t border-default">
+          <JiraIssueRow v-for="issue in project.items" :key="issue.id" :issue="issue">
+            <template #related>
+              <slot name="related" :issue="issue" />
+            </template>
+            <template #actions>
+              <slot name="actions" :issue="issue" />
+            </template>
+          </JiraIssueRow>
+        </ul>
+      </section>
+    </div>
 
     <UEmpty
       v-else-if="issues.length"
