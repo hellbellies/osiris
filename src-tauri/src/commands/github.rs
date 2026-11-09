@@ -9,10 +9,10 @@ use crate::models::github::{
     PullRequest, PullRequestList,
 };
 use crate::services::github_client::GitHubClient;
-use crate::services::secrets::KeyringStore;
+use crate::services::secrets::{KeyringStore, SecretStore};
 use crate::services::{github, pull_requests};
 
-const TOKEN_STORE: KeyringStore = KeyringStore::new("ch.imfeld.osiris", "github-token");
+pub(super) const TOKEN_STORE: KeyringStore = KeyringStore::new("ch.imfeld.osiris", "github-token");
 
 #[tauri::command]
 pub async fn get_github_settings(app: AppHandle) -> AppResult<GitHubSettings> {
@@ -60,6 +60,17 @@ pub async fn sync_pull_requests(app: AppHandle, db: State<'_, Db>) -> AppResult<
     let config = github::load_config(&dir)?;
     let client = GitHubClient::new(github::token(&TOKEN_STORE)?)?;
     pull_requests::sync(&db, &client, &config.repositories, now_ms()).await
+}
+
+/// Searches the pull requests related to the cached Jira issues; run after a Jira sync.
+/// Does nothing without a GitHub token. `all` searches done issues again too.
+pub(super) async fn sync_jira_mentions(app: &AppHandle, db: &Db, all: bool) -> AppResult<()> {
+    let Some(token) = TOKEN_STORE.get()? else {
+        return Ok(());
+    };
+    let config = github::load_config(&app.path().app_config_dir()?)?;
+    let client = GitHubClient::new(token)?;
+    pull_requests::sync_mentions(db, &client, &config.repositories, all).await
 }
 
 /// Re-fetches one cached pull request from GitHub and returns it updated.

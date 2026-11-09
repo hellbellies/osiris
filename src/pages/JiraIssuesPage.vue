@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { JiraIssuePullRequests } from "@/features/github";
+import { JiraIssuePullRequests, usePullRequestsStore } from "@/features/github";
 import { JiraIssueList, useJiraIssuesStore } from "@/features/jira";
 import { WorkstreamSelect } from "@/features/workstreams";
 
 const jiraStore = useJiraIssuesStore();
+const pullRequestsStore = usePullRequestsStore();
 </script>
 
 <template>
@@ -12,7 +13,8 @@ const jiraStore = useJiraIssuesStore();
       <UDashboardNavbar title="Jira issues" icon="i-lucide-ticket" />
     </template>
     <template #body>
-      <JiraIssueList>
+      <!-- A Jira fetch also updates the pull requests related to the issues. -->
+      <JiraIssueList @synced="pullRequestsStore.load()">
         <template #related="{ issue }">
           <JiraIssuePullRequests :issue-id="issue.id" />
         </template>

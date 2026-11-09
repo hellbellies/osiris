@@ -52,6 +52,8 @@ export interface JiraSyncSummary {
   mode: JiraSyncMode;
   upserted: number;
   removed: number;
+  /** Why the related pull requests could not be updated, if they couldn't. */
+  pullRequestError: string | null;
 }
 
 /** Mirrors `JiraProjectStatus` in `src-tauri/src/models/jira.rs`. */

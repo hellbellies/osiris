@@ -50,7 +50,8 @@ pub async fn list_jira_issues(db: State<'_, Db>) -> AppResult<JiraIssueList> {
 }
 
 /// Fetches the user's assigned issues; a delta sync unless `full` is set
-/// or the site, account or project selection changed.
+/// or the site, account or project selection changed. Then updates the pull requests
+/// related to them; a GitHub failure there is reported in the summary, not as an error.
 #[tauri::command]
 pub async fn sync_jira_issues(
     app: AppHandle,
@@ -60,7 +61,12 @@ pub async fn sync_jira_issues(
     let dir = app.path().app_config_dir()?;
     let config = jira::load_config(&dir)?;
     let client = JiraClient::new(jira::credentials(&dir, &TOKEN_STORE)?)?;
-    jira_issues::sync(&db, &client, &config.project_keys, full, now_ms()).await
+    let mut summary = jira_issues::sync(&db, &client, &config.project_keys, full, now_ms()).await?;
+    summary.pull_request_error = super::github::sync_jira_mentions(&app, &db, full)
+        .await
+        .err()
+        .map(|err| err.to_string());
+    Ok(summary)
 }
 
 #[tauri::command]
