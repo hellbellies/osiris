@@ -84,13 +84,13 @@ A classic token sees everything your account can see, unless an organization has
 
 #### In osiris
 
-Under **Settings → GitHub**, paste the token and click **Test connection** — it should show your GitHub login. Optionally limit the search with **Repositories**: comma-separated `owner/repo` entries, or `owner` for everything a user or organization owns. Leave it empty to search all repositories the token can see. Then click **Fetch** on the **Pull requests** page.
+Under **Settings → GitHub**, paste the token and click **Test connection** — it should show your GitHub login. Optionally limit the search with **Repositories**: comma-separated `owner/repo` entries, or `owner` for everything a user or organization owns. Leave it empty to search all repositories the token can see. Then fetch them from the sidebar (**Fetch all**, or the refresh button next to **Pull requests**).
 
 **Other open pull requests** lists everyone else's open pull requests in the configured **Repositories**. While that field is empty, it covers the repositories your own and review-requested pull requests are in.
 
-Jira issues show the pull requests that mention their key (e.g. `FOO-123`) in the title or description, whether open, merged or closed, as badges that open the pull request on GitHub. osiris finds them with GitHub search when you **Fetch** on the **Jira issues** page (the pull requests page's **Fetch** only covers open pull requests), in the configured **Repositories**, or else in the repositories of your own pull requests as of the last pull request **Fetch**. Jira's own development information is not used. If GitHub can't be reached, the Jira issues are still updated and a warning says so.
+Jira issues show the pull requests that mention their key (e.g. `FOO-123`) in the title or description, whether open, merged or closed, as badges that open the pull request on GitHub. osiris finds them with GitHub search whenever it fetches Jira issues (fetching pull requests only covers open pull requests), in the configured **Repositories**, or else in the repositories of your own pull requests as of the last pull request fetch. Jira's own development information is not used. If GitHub can't be reached, the Jira issues are still updated and a warning says so.
 
-Done issues in a workstream are searched one last time and then keep the pull requests found so far (their state still updates); **Full refresh** or changing **Repositories** searches them again.
+Done issues in a workstream are searched one last time and then keep the pull requests found so far (their state still updates); **Full refresh** (in the **…** menu next to **Jira issues** in the sidebar) or changing **Repositories** searches them again.
 
 GitHub Enterprise Server is not supported yet.
 

@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { storeToRefs } from "pinia";
-import { useToast } from "@nuxt/ui/composables";
 import { useTimeAgo } from "@vueuse/core";
 import { usePullRequestsStore } from "../stores/pullRequestsStore";
 import PullRequestRow from "./PullRequestRow.vue";
-import type { GitHubSyncSummary, PullRequest } from "@/types";
+import type { PullRequest } from "@/types";
 
 defineSlots<{
   /** Extra controls at the end of each row. */
@@ -14,7 +13,6 @@ defineSlots<{
 
 const store = usePullRequestsStore();
 const { pullRequests, lastSyncedAt, loaded, syncing, error } = storeToRefs(store);
-const toast = useToast();
 
 const lastSyncedAgo = useTimeAgo(computed(() => lastSyncedAt.value ?? 0));
 
@@ -53,31 +51,17 @@ const sections = computed(() => [
   },
 ]);
 
-async function sync(): Promise<void> {
-  const summary = await store.sync();
-  if (summary) toast.add({ title: describe(summary), icon: "i-lucide-refresh-cw", color: "success" });
-}
-
-function describe(summary: GitHubSyncSummary): string {
-  const parts = [summary.fetched === 1 ? "1 pull request" : `${summary.fetched} pull requests`];
-  if (summary.removed) parts.push(`${summary.removed} no longer need you`);
-  if (summary.others) parts.push(`${summary.others} other open`);
-  return parts.join(", ");
-}
-
+// Fetching lives in the sidebar (SidebarFetch), so it is available on every page.
 // Local data only, so always reload: other views may have changed workstream links.
 onMounted(() => void store.load());
 </script>
 
 <template>
   <div class="flex flex-col gap-6">
-    <div class="flex items-center justify-between gap-4">
-      <p class="text-sm text-muted">
-        <template v-if="lastSyncedAt">Last fetched {{ lastSyncedAgo }}</template>
-        <template v-else>Not fetched yet</template>
-      </p>
-      <UButton icon="i-lucide-refresh-cw" label="Fetch" :loading="syncing" @click="sync" />
-    </div>
+    <p class="text-sm text-muted">
+      <template v-if="lastSyncedAt">Last fetched {{ lastSyncedAgo }}</template>
+      <template v-else>Not fetched yet</template>
+    </p>
 
     <UAlert
       v-if="error"
@@ -92,7 +76,7 @@ onMounted(() => void store.load());
       class="py-10"
       icon="i-lucide-git-pull-request"
       title="No pull requests yet"
-      description="Add a GitHub token in the settings, then fetch your pull requests."
+      description="Add a GitHub token in the settings, then use Fetch in the sidebar."
     />
 
     <template v-else>

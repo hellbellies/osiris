@@ -1,17 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { storeToRefs } from "pinia";
-import { useToast } from "@nuxt/ui/composables";
 import { useTimeAgo } from "@vueuse/core";
 import { useJiraIssuesStore } from "../stores/jiraIssuesStore";
 import JiraIssueRow from "./JiraIssueRow.vue";
 import JiraStatusFilter from "./JiraStatusFilter.vue";
-import type { JiraIssue, JiraSyncSummary } from "@/types";
-
-const emit = defineEmits<{
-  /** A fetch finished; related data (e.g. pull request badges) may have changed. */
-  synced: [];
-}>();
+import type { JiraIssue } from "@/types";
 
 defineSlots<{
   /** Related items shown after each row's summary. */
@@ -30,7 +24,6 @@ const {
   syncing,
   error,
 } = storeToRefs(store);
-const toast = useToast();
 
 const lastSyncedAgo = useTimeAgo(computed(() => lastSyncedAt.value ?? 0));
 
@@ -47,27 +40,7 @@ const projects = computed(() => {
     .sort((a, b) => a.key.localeCompare(b.key));
 });
 
-async function sync(full: boolean): Promise<void> {
-  const summary = await store.sync(full);
-  if (!summary) return;
-  toast.add({ title: describe(summary), icon: "i-lucide-refresh-cw", color: "success" });
-  if (summary.pullRequestError) {
-    toast.add({
-      title: "Related pull requests not updated",
-      description: summary.pullRequestError,
-      icon: "i-lucide-triangle-alert",
-      color: "warning",
-    });
-  }
-  emit("synced");
-}
-
-function describe(summary: JiraSyncSummary): string {
-  if (summary.mode === "full") return `Fetched ${summary.upserted} issues`;
-  if (summary.upserted === 0 && summary.removed === 0) return "Already up to date";
-  return `${summary.upserted} updated, ${summary.removed} removed`;
-}
-
+// Fetching lives in the sidebar (SidebarFetch), so it is available on every page.
 // Local data only, so always reload: other views may have changed workstream links.
 onMounted(() => void store.load());
 </script>
@@ -86,25 +59,7 @@ onMounted(() => void store.load());
             </template>
           </p>
         </div>
-        <div class="flex gap-2">
-          <JiraStatusFilter />
-          <UTooltip text="Re-fetch everything, e.g. to drop issues deleted in Jira">
-            <UButton
-              color="neutral"
-              variant="ghost"
-              icon="i-lucide-database-zap"
-              label="Full refresh"
-              :disabled="syncing"
-              @click="sync(true)"
-            />
-          </UTooltip>
-          <UButton
-            icon="i-lucide-refresh-cw"
-            label="Fetch"
-            :loading="syncing"
-            @click="sync(false)"
-          />
-        </div>
+        <JiraStatusFilter />
       </div>
     </template>
 
@@ -155,7 +110,7 @@ onMounted(() => void store.load());
       :description="
         lastSyncedAt
           ? 'Nothing in your projects is assigned to you.'
-          : 'Add project keys in the settings, then fetch your issues.'
+          : 'Add project keys in the settings, then use Fetch in the sidebar.'
       "
     />
   </UCard>

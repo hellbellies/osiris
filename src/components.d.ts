@@ -13,6 +13,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SidebarFetch: typeof import('./components/SidebarFetch.vue')['default']
     UAlert: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/Alert.vue')['default']
     UApp: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/App.vue')['default']
     UBadge: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/Badge.vue')['default']
@@ -24,6 +25,7 @@ declare module 'vue' {
     UDashboardPanel: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/DashboardPanel.vue')['default']
     UDashboardSidebar: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/DashboardSidebar.vue')['default']
     UDashboardToolbar: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/DashboardToolbar.vue')['default']
+    UDropdownMenu: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/DropdownMenu.vue')['default']
     UEmpty: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/Empty.vue')['default']
     UFormField: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/components/FormField.vue')['default']
     UIcon: typeof import('./../node_modules/.pnpm/@nuxt+ui@4.12.0_7e7b11dd2d7c20ae0e516fde66532f81/node_modules/@nuxt/ui/dist/runtime/vue/components/Icon.vue')['default']
