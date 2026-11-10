@@ -10,6 +10,7 @@ import { useTodosStore } from "@/features/todos";
 import { useWorkstreamsStore } from "@/features/workstreams";
 import { useObsidianStore } from "@/features/obsidian";
 import type { ObsidianStatus } from "@/types";
+import SidebarFetch from "@/components/SidebarFetch.vue";
 
 const settingsStore = useSettingsStore();
 useThemeSync(computed(() => settingsStore.settings?.theme));
@@ -125,12 +126,15 @@ onMounted(() => {
         </template>
 
         <template #footer="{ collapsed }">
-          <UNavigationMenu
-            :collapsed="collapsed"
-            :items="footerItems"
-            orientation="vertical"
-            class="w-full"
-          />
+          <div class="flex w-full flex-col gap-3">
+            <SidebarFetch :collapsed="collapsed" />
+            <UNavigationMenu
+              :collapsed="collapsed"
+              :items="footerItems"
+              orientation="vertical"
+              class="w-full"
+            />
+          </div>
         </template>
       </UDashboardSidebar>
 
