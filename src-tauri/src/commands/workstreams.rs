@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use super::now_ms;
 use crate::db::Db;
@@ -6,7 +6,7 @@ use crate::error::AppResult;
 use crate::models::workstreams::{
     Workstream, WorkstreamDetail, WorkstreamItemRef, WorkstreamItemSearch,
 };
-use crate::services::workstreams;
+use crate::services::{obsidian, workstreams};
 
 #[tauri::command]
 pub async fn list_workstreams(db: State<'_, Db>) -> AppResult<Vec<Workstream>> {
@@ -58,11 +58,20 @@ pub async fn set_item_workstream(
     workstreams::set_item_workstream(&mut db.lock(), &item, workstream_id, now_ms())
 }
 
-/// Jira issues, pull requests and todos whose text contains `query`.
+/// Jira issues, pull requests, todos and Obsidian notes matching `query`. Obsidian
+/// being unavailable is reported in the result, not as an error.
 #[tauri::command]
 pub async fn search_workstream_items(
+    app: AppHandle,
     db: State<'_, Db>,
     query: String,
 ) -> AppResult<WorkstreamItemSearch> {
-    workstreams::search_items(&db.lock(), &query)
+    let mut found = workstreams::search_items(&db.lock(), &query)?;
+    let app = super::obsidian::app(&app)?;
+    let limit = super::obsidian::SEARCH_LIMIT;
+    match super::obsidian::blocking(move || obsidian::search(&app, &query, limit)).await {
+        Ok(notes) => found.obsidian_notes = obsidian::with_workstreams(&db.lock(), &notes)?,
+        Err(err) => found.obsidian_error = Some(err.to_string()),
+    }
+    Ok(found)
 }

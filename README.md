@@ -94,4 +94,14 @@ Done issues in a workstream are searched one last time and then keep the pull re
 
 GitHub Enterprise Server is not supported yet.
 
+### Obsidian
+
+Workstreams can hold Obsidian notes next to Jira issues, pull requests and todos: **Add notes** on a workstream (or the search when creating one) finds notes by name and text, and clicking a note opens it in Obsidian. osiris uses Obsidian's command line interface, so it needs:
+
+1. Obsidian 1.12.7 or later in `/Applications` (the CLI needs a current installer, not just an in-app update).
+2. Obsidian running. osiris never starts it: the CLI would launch it.
+3. The command line interface turned on in Obsidian under **Settings → General → Advanced**. Registering the `obsidian` terminal command is not needed.
+
+osiris checks these at startup (warning if Obsidian is set up incompletely) and shows each step under **Settings → Obsidian**. Only vaults that are open in Obsidian are searched, because the CLI opens any vault it searches. osiris remembers only the vault and path of linked notes; it never changes them. A note that is renamed or moved in Obsidian has to be added again.
+
 See [CLAUDE.md](CLAUDE.md) for architecture and conventions.

@@ -27,6 +27,7 @@ const MIGRATIONS_SLICE: &[M<'_>] = &[
     M::up(include_str!(
         "../migrations/010_jira_issue_pull_request_searches.sql"
     )),
+    M::up(include_str!("../migrations/011_obsidian_notes.sql")),
 ];
 const MIGRATIONS: Migrations<'_> = Migrations::from_slice(MIGRATIONS_SLICE);
 

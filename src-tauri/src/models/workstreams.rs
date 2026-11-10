@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::github::PullRequest;
 use crate::models::jira::JiraIssue;
+use crate::models::obsidian::ObsidianNote;
 use crate::models::todos::Todo;
 
 /// Mirrored by `Workstream` in `src/types/workstreams.ts`.
@@ -27,6 +28,7 @@ pub struct WorkstreamDetail {
     pub jira_issues: Vec<JiraIssue>,
     pub pull_requests: Vec<PullRequest>,
     pub todos: Vec<Todo>,
+    pub obsidian_notes: Vec<ObsidianNote>,
 }
 
 /// Items of every type matching a search term, to pick from when building a workstream.
@@ -37,6 +39,10 @@ pub struct WorkstreamItemSearch {
     pub jira_issues: Vec<JiraIssue>,
     pub pull_requests: Vec<PullRequest>,
     pub todos: Vec<Todo>,
+    /// Notes in the open Obsidian vaults; filled in by the command (needs the CLI).
+    pub obsidian_notes: Vec<ObsidianNote>,
+    /// Why Obsidian couldn't be searched, e.g. because it isn't running.
+    pub obsidian_error: Option<String>,
 }
 
 /// Kinds of items a workstream can hold. Mirrored by `WorkstreamItemType` in `src/types/workstreams.ts`.
@@ -46,6 +52,7 @@ pub enum WorkstreamItemType {
     JiraIssue,
     PullRequest,
     Todo,
+    ObsidianNote,
 }
 
 impl WorkstreamItemType {
@@ -55,6 +62,7 @@ impl WorkstreamItemType {
             Self::JiraIssue => "jira_issue",
             Self::PullRequest => "github_pr",
             Self::Todo => "todo",
+            Self::ObsidianNote => "obsidian_note",
         }
     }
 }

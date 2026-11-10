@@ -5,8 +5,9 @@ import { useToast } from "@nuxt/ui/composables";
 import { JiraIssueRow, useJiraIssuesStore } from "@/features/jira";
 import { JiraIssuePullRequests, PullRequestRow } from "@/features/github";
 import { TodoEditModal, TodoRow } from "@/features/todos";
+import { ObsidianNotePicker, ObsidianNoteRow } from "@/features/obsidian";
 import { useWorkstreamsStore } from "../stores/workstreamsStore";
-import type { AppError, Todo, WorkstreamItemRef } from "@/types";
+import type { AppError, ObsidianNote, Todo, WorkstreamItemRef } from "@/types";
 
 /** Lists everything in a workstream, grouped by item type. */
 const props = defineProps<{ id: number }>();
@@ -36,6 +37,13 @@ const editingTodo = ref<Todo | null>(null);
 function openTodo(todo: Todo | null): void {
   editingTodo.value = todo;
   todoModalOpen.value = true;
+}
+
+const notePickerOpen = ref(false);
+
+/** Moves a picked note into this workstream (out of any other one). */
+function addNote(note: ObsidianNote): Promise<void> {
+  return store.assign({ itemType: "obsidianNote", itemId: note.id }, props.id);
 }
 
 watch(() => props.id, (id) => void store.loadDetail(id));
@@ -106,6 +114,51 @@ onMounted(() => {
       :todo="editingTodo"
       :workstream-id="id"
       @changed="refresh"
+    />
+
+    <UCard :ui="{ body: 'p-0 sm:p-0' }">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <UIcon name="i-lucide-notebook-pen" class="size-4 text-muted" />
+          <h2 class="font-semibold text-highlighted">Notes</h2>
+          <UBadge color="neutral" variant="subtle" size="sm" :label="current.obsidianNotes.length" />
+          <UButton
+            class="ml-auto"
+            color="neutral"
+            variant="ghost"
+            size="sm"
+            icon="i-lucide-plus"
+            label="Add notes"
+            @click="notePickerOpen = true"
+          />
+        </div>
+      </template>
+
+      <ul v-if="current.obsidianNotes.length" class="divide-y divide-default">
+        <ObsidianNoteRow v-for="note in current.obsidianNotes" :key="note.id" :note="note">
+          <template #actions>
+            <UTooltip text="Remove from workstream (keeps the note)">
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="sm"
+                icon="i-lucide-x"
+                :aria-label="`Remove ${note.title} from workstream`"
+                @click="removeItem({ itemType: 'obsidianNote', itemId: note.id })"
+              />
+            </UTooltip>
+          </template>
+        </ObsidianNoteRow>
+      </ul>
+      <p v-else class="px-4 py-6 text-center text-sm text-muted">
+        No notes yet. Use “Add notes” to find notes in your open Obsidian vaults.
+      </p>
+    </UCard>
+
+    <ObsidianNotePicker
+      v-model:open="notePickerOpen"
+      :pick="addNote"
+      :picked-ids="current.obsidianNotes.map((note) => note.id)"
     />
 
     <UCard :ui="{ body: 'p-0 sm:p-0' }">

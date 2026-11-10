@@ -2,6 +2,7 @@
 import { SettingsPanel } from "@/features/settings";
 import { JiraSettingsPanel } from "@/features/jira";
 import { GitHubSettingsPanel } from "@/features/github";
+import { ObsidianStatusPanel } from "@/features/obsidian";
 </script>
 
 <template>
@@ -14,6 +15,7 @@ import { GitHubSettingsPanel } from "@/features/github";
         <SettingsPanel />
         <JiraSettingsPanel />
         <GitHubSettingsPanel />
+        <ObsidianStatusPanel />
       </div>
     </template>
   </UDashboardPanel>

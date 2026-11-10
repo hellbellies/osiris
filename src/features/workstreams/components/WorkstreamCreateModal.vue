@@ -126,6 +126,19 @@ const groups = computed(() => {
         ),
       ),
     },
+    {
+      label: "Obsidian notes",
+      icon: "i-lucide-notebook-pen",
+      items: found.obsidianNotes.map((note) =>
+        candidate(
+          { itemType: "obsidianNote", itemId: note.id },
+          null,
+          note.title,
+          [note.vault, note.folder],
+          note.workstreamId,
+        ),
+      ),
+    },
   ].filter((group) => group.items.length);
 });
 
@@ -190,8 +203,9 @@ async function submit(): Promise<void> {
         <UFormField
           label="Items"
           hint="Optional"
-          description="Find synced Jira issues, pull requests and todos that contain a search term."
+          description="Find synced Jira issues, pull requests, todos and Obsidian notes that contain a search term."
           :error="searchError ?? undefined"
+          :help="results?.obsidianError ? `Obsidian notes not searched: ${results.obsidianError}` : undefined"
         >
           <UInput
             v-model="query"
