@@ -1,4 +1,5 @@
-//! Workstreams bundle related items of any type (Jira issues, pull requests, todos).
+//! Workstreams bundle related items of any type (Jira issues, pull requests, todos,
+//! Obsidian notes).
 //! A workstream is active until marked completed; completed ones keep their items.
 //!
 //! Links live in `workstream_items`, keyed by `(item_type, item_id)` so an item
@@ -11,7 +12,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::workstreams::{
     Workstream, WorkstreamDetail, WorkstreamItemRef, WorkstreamItemSearch, WorkstreamItemType,
 };
-use crate::services::{jira_issues, pull_requests, todos};
+use crate::services::{jira_issues, obsidian, pull_requests, todos};
 
 const MAX_NAME_LENGTH: usize = 80;
 /// Most results returned per item type by [`search_items`].
@@ -59,6 +60,7 @@ pub fn detail(conn: &Connection, id: i64) -> AppResult<WorkstreamDetail> {
         jira_issues: jira_issues::list_for_workstream(conn, id)?,
         pull_requests: pull_requests::list_for_workstream(conn, id)?,
         todos: todos::list_for_workstream(conn, id)?,
+        obsidian_notes: obsidian::list_for_workstream(conn, id)?,
     })
 }
 
@@ -129,6 +131,7 @@ pub fn delete(conn: &mut Connection, id: i64) -> AppResult<()> {
     }
     jira_issues::prune_unlinked(&tx)?;
     pull_requests::prune_unlinked(&tx)?;
+    obsidian::prune_unlinked(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -190,6 +193,7 @@ pub fn search_items(conn: &Connection, query: &str) -> AppResult<WorkstreamItemS
         jira_issues: jira_issues::search(conn, term, SEARCH_LIMIT)?,
         pull_requests: pull_requests::search(conn, term, SEARCH_LIMIT)?,
         todos: todos::search(conn, term, SEARCH_LIMIT)?,
+        ..WorkstreamItemSearch::default()
     })
 }
 
@@ -198,6 +202,8 @@ fn item_exists(conn: &Connection, item: &WorkstreamItemRef) -> AppResult<bool> {
         WorkstreamItemType::JiraIssue => jira_issues::exists(conn, &item.item_id),
         WorkstreamItemType::PullRequest => pull_requests::exists(conn, &item.item_id),
         WorkstreamItemType::Todo => todos::exists(conn, &item.item_id),
+        // Notes live in Obsidian: linking one caches its vault and path.
+        WorkstreamItemType::ObsidianNote => obsidian::register(conn, &item.item_id),
     }
 }
 
@@ -208,6 +214,7 @@ fn prune(conn: &Connection, item_type: WorkstreamItemType) -> AppResult<()> {
         WorkstreamItemType::PullRequest => pull_requests::prune_unlinked(conn).map(|_| ()),
         // Todos belong to the user, not to a workstream: unlinking keeps them.
         WorkstreamItemType::Todo => Ok(()),
+        WorkstreamItemType::ObsidianNote => obsidian::prune_unlinked(conn).map(|_| ()),
     }
 }
 
@@ -264,6 +271,40 @@ mod tests {
             params![id, assigned],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn obsidian_notes_are_cached_while_linked() {
+        let mut conn = db::open_in_memory();
+        let workstream = create(&conn, "W", NOW).unwrap();
+        let note = WorkstreamItemRef {
+            item_type: WorkstreamItemType::ObsidianNote,
+            item_id: "Work/Meetings/Plan.md".into(),
+        };
+        set_item_workstream(&mut conn, &note, Some(workstream.id), NOW).unwrap();
+        let notes = detail(&conn, workstream.id).unwrap().obsidian_notes;
+        assert_eq!(
+            (notes[0].title.as_str(), notes[0].workstream_id),
+            ("Plan", Some(workstream.id))
+        );
+
+        set_item_workstream(&mut conn, &note, None, NOW).unwrap();
+        assert!(
+            detail(&conn, workstream.id)
+                .unwrap()
+                .obsidian_notes
+                .is_empty()
+        );
+        let cached: i64 = conn
+            .query_row("SELECT COUNT(*) FROM obsidian_notes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cached, 0);
+
+        let bad = WorkstreamItemRef {
+            item_id: "../etc/passwd".into(),
+            ..note
+        };
+        assert!(set_item_workstream(&mut conn, &bad, Some(workstream.id), NOW).is_err());
     }
 
     #[test]

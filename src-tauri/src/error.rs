@@ -35,6 +35,9 @@ pub enum AppError {
 
     #[error("{0}")]
     GitHub(String),
+
+    #[error("{0}")]
+    Obsidian(String),
 }
 
 impl AppError {
@@ -48,6 +51,7 @@ impl AppError {
             AppError::Validation(_) => "validation",
             AppError::Jira(_) => "jira",
             AppError::GitHub(_) => "github",
+            AppError::Obsidian(_) => "obsidian",
         }
     }
 }

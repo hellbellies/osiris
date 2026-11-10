@@ -6,6 +6,7 @@ pub mod github_client;
 pub mod jira;
 pub mod jira_client;
 pub mod jira_issues;
+pub mod obsidian;
 pub mod pull_requests;
 pub mod secrets;
 pub mod settings;

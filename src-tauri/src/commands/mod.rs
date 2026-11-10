@@ -3,6 +3,7 @@
 
 pub mod github;
 pub mod jira;
+pub mod obsidian;
 pub mod settings;
 pub mod todos;
 pub mod workstreams;

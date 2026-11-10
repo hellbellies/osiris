@@ -2,11 +2,14 @@
 import { computed, onMounted } from "vue";
 import { storeToRefs } from "pinia";
 import type { NavigationMenuItem } from "@nuxt/ui";
+import { useToast } from "@nuxt/ui/composables";
 import { useSettingsStore, useThemeSync } from "@/features/settings";
 import { useJiraIssuesStore } from "@/features/jira";
 import { usePullRequestsStore } from "@/features/github";
 import { useTodosStore } from "@/features/todos";
 import { useWorkstreamsStore } from "@/features/workstreams";
+import { useObsidianStore } from "@/features/obsidian";
+import type { ObsidianStatus } from "@/types";
 
 const settingsStore = useSettingsStore();
 useThemeSync(computed(() => settingsStore.settings?.theme));
@@ -65,8 +68,33 @@ const footerItems: NavigationMenuItem[] = [
   { label: "Settings", icon: "i-lucide-settings", to: "/settings" },
 ];
 
+const obsidianStore = useObsidianStore();
+const toast = useToast();
+
+/**
+ * Warns at startup when Obsidian is installed but can't be used for notes. Not
+ * installed or not running stays quiet: that is normal, and Settings shows it.
+ */
+function warnAboutObsidian(status: ObsidianStatus | null): void {
+  const problems: Partial<Record<ObsidianStatus["state"], string>> = {
+    outdated: `Obsidian ${status?.version ?? ""} is too old for its command line interface; 1.12.7 or later is needed.`,
+    cliDisabled: "Turn on its command line interface: Obsidian → Settings → General → Advanced.",
+    failed: status?.message ?? "Obsidian answered unexpectedly.",
+  };
+  const description = status && problems[status.state];
+  if (!description) return;
+  toast.add({
+    title: "Obsidian notes unavailable",
+    description,
+    icon: "i-lucide-triangle-alert",
+    color: "warning",
+    actions: [{ label: "Settings", color: "neutral", variant: "subtle", to: "/settings" }],
+  });
+}
+
 // Everything here is local data; the theme in particular is needed before any page renders.
 onMounted(() => {
+  void obsidianStore.checkStatus().then(warnAboutObsidian);
   if (!settingsStore.settings) void settingsStore.load();
   void workstreamsStore.load();
   void jiraStore.load();

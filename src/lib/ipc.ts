@@ -13,6 +13,8 @@ import type {
   JiraStatusRef,
   JiraSyncSummary,
   JiraUser,
+  ObsidianNote,
+  ObsidianStatus,
   PullRequest,
   PullRequestList,
   Settings,
@@ -57,6 +59,9 @@ interface Commands {
   set_todo_completed: { args: { id: number; completed: boolean }; result: Todo };
   delete_todo: { args: { id: number }; result: null };
   open_todo_link: { args: { url: string }; result: null };
+  get_obsidian_status: { args: Record<string, never>; result: ObsidianStatus };
+  search_obsidian_notes: { args: { query: string }; result: ObsidianNote[] };
+  open_obsidian_note: { args: { id: string }; result: null };
   list_workstreams: { args: Record<string, never>; result: Workstream[] };
   get_workstream: { args: { id: number }; result: WorkstreamDetail };
   create_workstream: { args: { name: string; items: WorkstreamItemRef[] }; result: Workstream };
