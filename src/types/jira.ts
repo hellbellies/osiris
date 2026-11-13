@@ -3,6 +3,8 @@ export interface JiraSettings {
   baseUrl: string;
   email: string;
   projectKeys: string[];
+  /** Statuses whose issues are listed whoever they are assigned to. */
+  watchedStatuses: JiraStatusRef[];
   hasToken: boolean;
 }
 
@@ -11,6 +13,7 @@ export interface JiraSettingsInput {
   baseUrl: string;
   email: string;
   projectKeys: string[];
+  watchedStatuses: JiraStatusRef[];
   apiToken?: string | null;
 }
 
@@ -32,8 +35,10 @@ export interface JiraIssue {
   projectKey: string;
   statusId: string;
   statusName: string;
-  /** False for issues kept only because they belong to a workstream. */
+  /** False for issues listed because of a watched status, or kept only for a workstream. */
   assignedToMe: boolean;
+  /** In a status the user watches, so listed whoever it is assigned to. */
+  watched: boolean;
   workstreamId: number | null;
 }
 

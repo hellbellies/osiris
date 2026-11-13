@@ -61,7 +61,15 @@ pub async fn sync_jira_issues(
     let dir = app.path().app_config_dir()?;
     let config = jira::load_config(&dir)?;
     let client = JiraClient::new(jira::credentials(&dir, &TOKEN_STORE)?)?;
-    let mut summary = jira_issues::sync(&db, &client, &config.project_keys, full, now_ms()).await?;
+    let mut summary = jira_issues::sync(
+        &db,
+        &client,
+        &config.project_keys,
+        &config.watched_statuses,
+        full,
+        now_ms(),
+    )
+    .await?;
     summary.pull_request_error = super::github::sync_jira_mentions(&app, &db, full)
         .await
         .err()

@@ -8,6 +8,8 @@ pub struct JiraConfig {
     pub base_url: String,
     pub email: String,
     pub project_keys: Vec<String>,
+    /// Statuses whose issues are listed whoever they are assigned to ("Also show").
+    pub watched_statuses: Vec<JiraStatusRef>,
 }
 
 /// What the frontend sees. Mirrored by `JiraSettings` in `src/types/jira.ts`.
@@ -18,6 +20,7 @@ pub struct JiraSettings {
     pub base_url: String,
     pub email: String,
     pub project_keys: Vec<String>,
+    pub watched_statuses: Vec<JiraStatusRef>,
     pub has_token: bool,
 }
 
@@ -30,6 +33,8 @@ pub struct JiraSettingsInput {
     pub email: String,
     #[serde(default)]
     pub project_keys: Vec<String>,
+    #[serde(default)]
+    pub watched_statuses: Vec<JiraStatusRef>,
     pub api_token: Option<String>,
 }
 
@@ -59,8 +64,11 @@ pub struct JiraIssue {
     pub project_key: String,
     pub status_id: String,
     pub status_name: String,
-    /// False for issues kept only because they belong to a workstream.
+    /// False for issues listed because of a watched status, or kept only because
+    /// they belong to a workstream.
     pub assigned_to_me: bool,
+    /// In a status the user watches, so listed whoever it is assigned to.
+    pub watched: bool,
     pub workstream_id: Option<i64>,
 }
 
