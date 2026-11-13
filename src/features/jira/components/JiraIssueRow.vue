@@ -55,7 +55,13 @@ const statusColor = computed(() => {
     </ULink>
     <!-- Related items from other features, e.g. pull requests mentioning the issue. -->
     <slot name="related" />
-    <UTooltip v-if="!issue.assignedToMe" text="No longer assigned to you">
+    <UTooltip
+      v-if="!issue.assignedToMe && issue.watched"
+      text="Not assigned to you: listed because its status is watched (Jira settings)"
+    >
+      <UIcon name="i-lucide-users" class="size-4 shrink-0 text-muted" />
+    </UTooltip>
+    <UTooltip v-else-if="!issue.assignedToMe" text="No longer assigned to you">
       <UIcon name="i-lucide-user-x" class="size-4 shrink-0 text-muted" />
     </UTooltip>
     <UBadge

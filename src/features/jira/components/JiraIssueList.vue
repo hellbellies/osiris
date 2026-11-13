@@ -26,6 +26,11 @@ const {
 } = storeToRefs(store);
 
 const lastSyncedAgo = useTimeAgo(computed(() => lastSyncedAt.value ?? 0));
+const title = computed(() =>
+  issues.value.some((issue) => issue.watched && !issue.assignedToMe)
+    ? "Assigned to me or watched"
+    : "Assigned to me",
+);
 
 /** Visible issues grouped by project (space), alphabetically; issue order is kept. */
 const projects = computed(() => {
@@ -50,7 +55,7 @@ onMounted(() => void store.load());
     <template #header>
       <div class="flex items-center justify-between gap-4">
         <div>
-          <h2 class="font-semibold text-highlighted">Assigned to me</h2>
+          <h2 class="font-semibold text-highlighted">{{ title }}</h2>
           <p class="text-sm text-muted">
             <template v-if="lastSyncedAt">Last fetched {{ lastSyncedAgo }}</template>
             <template v-else>Not fetched yet</template>

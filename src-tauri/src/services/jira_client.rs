@@ -244,6 +244,7 @@ impl From<SearchIssue> for JiraIssue {
             status_name: status_name.unwrap_or_default(),
             // Local state, decided by the sync and the workstream links.
             assigned_to_me: false,
+            watched: false,
             workstream_id: None,
         }
     }

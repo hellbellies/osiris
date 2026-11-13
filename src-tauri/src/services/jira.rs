@@ -4,7 +4,7 @@ use std::path::Path;
 use url::Url;
 
 use crate::error::{AppError, AppResult};
-use crate::models::jira::{JiraConfig, JiraSettings, JiraSettingsInput, JiraUser};
+use crate::models::jira::{JiraConfig, JiraSettings, JiraSettingsInput, JiraStatusRef, JiraUser};
 use crate::services::jira_client::{JiraClient, JiraCredentials};
 use crate::services::secrets::SecretStore;
 
@@ -50,6 +50,7 @@ pub fn get(dir: &Path, secrets: &impl SecretStore) -> AppResult<JiraSettings> {
         base_url: config.base_url,
         email: config.email,
         project_keys: config.project_keys,
+        watched_statuses: config.watched_statuses,
         has_token: secrets.get()?.is_some(),
     })
 }
@@ -60,10 +61,12 @@ pub fn save(
     secrets: &impl SecretStore,
     input: JiraSettingsInput,
 ) -> AppResult<JiraSettings> {
+    let project_keys = normalize_project_keys(&input.project_keys)?;
     let config = JiraConfig {
         base_url: normalize_base_url(&input.base_url)?,
         email: input.email.trim().to_owned(),
-        project_keys: normalize_project_keys(&input.project_keys)?,
+        watched_statuses: normalize_watched_statuses(&input.watched_statuses, &project_keys)?,
+        project_keys,
     };
     let token = match input.api_token.as_deref().map(str::trim) {
         Some("") => return Err(AppError::Validation("API token cannot be empty".into())),
@@ -159,6 +162,28 @@ fn normalize_project_keys(keys: &[String]) -> AppResult<Vec<String>> {
     Ok(normalized)
 }
 
+/// De-duplicates watched statuses and drops those of projects that are no longer
+/// configured. Status ids are numeric, which keeps them safe to embed in JQL.
+fn normalize_watched_statuses(
+    statuses: &[JiraStatusRef],
+    project_keys: &[String],
+) -> AppResult<Vec<JiraStatusRef>> {
+    let mut normalized: Vec<JiraStatusRef> = Vec::new();
+    for status in statuses {
+        if !project_keys.contains(&status.project_key) || normalized.contains(status) {
+            continue;
+        }
+        if status.status_id.is_empty() || !status.status_id.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(AppError::Validation(format!(
+                "'{}' is not a Jira status id",
+                status.status_id
+            )));
+        }
+        normalized.push(status.clone());
+    }
+    Ok(normalized)
+}
+
 /// Jira project keys: an uppercase letter followed by uppercase letters, digits or `_`.
 pub fn is_project_key(key: &str) -> bool {
     let mut chars = key.chars();
@@ -176,8 +201,34 @@ mod tests {
             base_url: base_url.into(),
             email: " me@example.com ".into(),
             project_keys: Vec::new(),
+            watched_statuses: Vec::new(),
             api_token: api_token.map(Into::into),
         }
+    }
+
+    fn status(project_key: &str, status_id: &str) -> JiraStatusRef {
+        JiraStatusRef {
+            project_key: project_key.into(),
+            status_id: status_id.into(),
+        }
+    }
+
+    #[test]
+    fn watched_statuses_are_deduplicated_and_kept_to_configured_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = MemoryStore::default();
+        let mut settings = input("https://x.atlassian.net", Some("t"));
+        settings.project_keys = vec!["sup".into()];
+        settings.watched_statuses = vec![
+            status("SUP", "10646"),
+            status("SUP", "10646"),
+            status("DEV", "1"),
+        ];
+        let saved = save(dir.path(), &secrets, settings.clone()).unwrap();
+        assert_eq!(saved.watched_statuses, [status("SUP", "10646")]);
+
+        settings.watched_statuses = vec![status("SUP", "1 OR 1=1")];
+        assert!(save(dir.path(), &secrets, settings).is_err());
     }
 
     #[test]

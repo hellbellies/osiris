@@ -1,8 +1,9 @@
 //! Local cache of Jira issues and the full/delta sync that fills it.
 //!
-//! The cache holds the issues assigned to the user that aren't done, plus issues
-//! that belong to a workstream (kept with `assigned_to_me = 0` after being
-//! reassigned or done). Unlinked issues that are no longer assigned are pruned.
+//! The cache holds the issues assigned to the user that aren't done, the issues in
+//! a watched status (whoever they are assigned to), plus issues that belong to a
+//! workstream (kept with `assigned_to_me = 0` after being reassigned or done).
+//! Other issues are pruned.
 //!
 //! A full sync re-fetches all assigned, not done issues and every workstream-linked
 //! issue. A delta sync asks Jira only for issues in the configured projects updated
@@ -36,7 +37,7 @@ const ID_QUERY_CHUNK: usize = 100;
 
 /// Columns read by [`issue_from_row`]; `i` is `jira_issues`, `w` is `workstream_items`.
 const ISSUE_COLUMNS: &str = "i.id, i.key, i.summary, i.issue_type, i.updated, i.project_key,
-     i.status_id, i.status_name, i.assigned_to_me, w.workstream_id";
+     i.status_id, i.status_name, i.assigned_to_me, i.watched, w.workstream_id";
 /// Joins each issue to its (optional) workstream link.
 const ISSUE_FROM: &str = "jira_issues i LEFT JOIN workstream_items w
      ON w.item_type = 'jira_issue' AND w.item_id = i.id";
@@ -56,12 +57,12 @@ struct SyncState {
     last_synced_at: i64,
 }
 
-/// Issues assigned to the user, most recently updated first.
+/// Issues assigned to the user or in a watched status, most recently updated first.
 pub fn list(conn: &Connection) -> AppResult<JiraIssueList> {
     let issues = conn
         .prepare(&format!(
             "SELECT {ISSUE_COLUMNS} FROM {ISSUE_FROM}
-             WHERE i.assigned_to_me = 1 ORDER BY i.updated DESC, i.key"
+             WHERE i.assigned_to_me = 1 OR i.watched = 1 ORDER BY i.updated DESC, i.key"
         ))?
         .query_map([], issue_from_row)?
         .collect::<Result<Vec<_>, _>>()?;
@@ -103,11 +104,12 @@ pub fn exists(conn: &Connection, id: &str) -> AppResult<bool> {
         .is_some())
 }
 
-/// Deletes issues that are neither assigned to the user nor linked to a workstream.
+/// Deletes issues that are neither assigned to the user, nor in a watched status,
+/// nor linked to a workstream.
 /// Call after anything that can unlink issues. Returns the number removed.
 pub fn prune_unlinked(conn: &Connection) -> AppResult<usize> {
     Ok(conn.execute(
-        "DELETE FROM jira_issues WHERE assigned_to_me = 0 AND id NOT IN
+        "DELETE FROM jira_issues WHERE assigned_to_me = 0 AND watched = 0 AND id NOT IN
              (SELECT item_id FROM workstream_items WHERE item_type = 'jira_issue')",
         [],
     )?)
@@ -124,17 +126,20 @@ fn issue_from_row(row: &Row<'_>) -> rusqlite::Result<JiraIssue> {
         status_id: row.get(6)?,
         status_name: row.get(7)?,
         assigned_to_me: row.get(8)?,
-        workstream_id: row.get(9)?,
+        watched: row.get(9)?,
+        workstream_id: row.get(10)?,
     })
 }
 
-/// Fetches the user's issues in `project_keys` and stores them.
-/// Runs a delta sync when possible; `force_full` or a changed site/account/project
-/// selection triggers a full sync. `now_ms` is recorded as the sync time.
+/// Fetches the user's issues in `project_keys`, plus all issues in the `watched`
+/// statuses, and stores them. Runs a delta sync when possible; `force_full` or a
+/// changed site/account/project/watched selection triggers a full sync. `now_ms` is
+/// recorded as the sync time.
 pub async fn sync(
     db: &Db,
     client: &JiraClient,
     project_keys: &[String],
+    watched: &[JiraStatusRef],
     force_full: bool,
     now_ms: i64,
 ) -> AppResult<JiraSyncSummary> {
@@ -143,7 +148,7 @@ pub async fn sync(
             "Add at least one project key in the Jira settings".into(),
         ));
     }
-    let scope = scope(client, project_keys);
+    let scope = scope(client, project_keys, watched);
     // The lock is released at the end of this statement — never hold it across `.await`.
     let state = load_state(&db.lock())?;
     let projects = jql_projects(project_keys);
@@ -152,15 +157,24 @@ pub async fn sync(
         SyncPlan::Full => {
             let jql = format!("{projects} AND {MINE} ORDER BY updated DESC");
             let mine = client.search(&jql).await?;
+            let mine_ids: HashSet<&str> = mine.iter().map(|issue| issue.id.as_str()).collect();
+            let mut others = Vec::new();
+            if let Some(statuses) = jql_statuses(watched) {
+                let jql = format!("{projects} AND {statuses}");
+                // Assigned ones are already in `mine`; listing them again would unassign them.
+                others.extend(
+                    (client.search(&jql).await?)
+                        .into_iter()
+                        .filter(|issue| !mine_ids.contains(issue.id.as_str())),
+                );
+            }
             // Refresh linked issues that are no longer (or never were) assigned to the user,
             // wherever they live. Ids come from Jira, but keep only numeric ones for safe JQL.
-            let mine_ids: HashSet<&str> = mine.iter().map(|issue| issue.id.as_str()).collect();
             let linked_ids: Vec<String> = linked_issue_ids(&db.lock())?
                 .into_iter()
                 .filter(|id| !mine_ids.contains(id.as_str()))
                 .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
                 .collect();
-            let mut others = Vec::new();
             for chunk in linked_ids.chunks(ID_QUERY_CHUNK) {
                 let jql = format!("id in ({})", chunk.join(", "));
                 others.extend(client.search(&jql).await?);
@@ -191,6 +205,7 @@ pub async fn sync(
         mine,
         others,
         statuses,
+        watched: watched.to_vec(),
     };
     apply(&mut db.lock(), &result, &scope, now_ms)
 }
@@ -266,15 +281,36 @@ fn plan(state: Option<&SyncState>, scope: &str, force_full: bool, now_ms: i64) -
 }
 
 /// Identifies what the stored issues belong to. If it changes, a delta is meaningless.
-fn scope(client: &JiraClient, project_keys: &[String]) -> String {
+fn scope(client: &JiraClient, project_keys: &[String], watched: &[JiraStatusRef]) -> String {
     let mut keys = project_keys.to_vec();
     keys.sort();
+    let mut statuses: Vec<String> = watched
+        .iter()
+        .map(|status| format!("{}:{}", status.project_key, status.status_id))
+        .collect();
+    statuses.sort();
     format!(
-        "{}|{}|{}",
+        "{}|{}|{}|{}",
         client.base_url(),
         client.email(),
-        keys.join(",")
+        keys.join(","),
+        statuses.join(",")
     )
+}
+
+/// `((project = "FOO" AND status = 3) OR …)`, `None` without statuses. Keys and
+/// (numeric) status ids are validated on save, so quoting is enough.
+fn jql_statuses(statuses: &[JiraStatusRef]) -> Option<String> {
+    let terms: Vec<String> = statuses
+        .iter()
+        .map(|status| {
+            format!(
+                "(project = \"{}\" AND status = {})",
+                status.project_key, status.status_id
+            )
+        })
+        .collect();
+    (!terms.is_empty()).then(|| format!("({})", terms.join(" OR ")))
 }
 
 /// `project in ("FOO", "BAR")`. Keys are validated on save, so quoting is enough.
@@ -291,9 +327,12 @@ struct SyncResult {
     mode: JiraSyncMode,
     /// Issues assigned to the user.
     mine: Vec<JiraIssue>,
-    /// Issues not assigned to the user: kept if linked to a workstream, otherwise pruned.
+    /// Issues not assigned to the user: kept if in a watched status or linked to a
+    /// workstream, otherwise pruned.
     others: Vec<JiraIssue>,
     statuses: Vec<JiraProjectStatus>,
+    /// Statuses whose issues are listed whoever they are assigned to.
+    watched: Vec<JiraStatusRef>,
 }
 
 /// Ids of all Jira issues linked to any workstream.
@@ -376,6 +415,17 @@ fn apply(
              (SELECT project_key, status_id FROM jira_project_statuses WHERE category = 'done')",
         [],
     )?;
+    // Recomputed from the stored status, so issues that left a watched status (or whose
+    // status is no longer watched) drop out too.
+    tx.execute("UPDATE jira_issues SET watched = 0", [])?;
+    {
+        let mut watch = tx.prepare(
+            "UPDATE jira_issues SET watched = 1 WHERE project_key = ?1 AND status_id = ?2",
+        )?;
+        for status in &result.watched {
+            watch.execute(params![status.project_key, status.status_id])?;
+        }
+    }
     prune_unlinked(&tx)?;
     // "Removed" from the user's point of view: no longer in their list of assigned issues.
     let assigned_after = assigned_ids(&tx)?;
@@ -527,7 +577,9 @@ mod tests {
             ]),
         )
         .await;
-        let summary = sync(&db, &client, &projects, false, NOW).await.unwrap();
+        let summary = sync(&db, &client, &projects, &[], false, NOW)
+            .await
+            .unwrap();
         assert_eq!(summary.mode, JiraSyncMode::Full);
         assert_eq!(summary.upserted, 2);
         assert_eq!(stored_keys(&db).len(), 2);
@@ -551,7 +603,7 @@ mod tests {
             page(&[issue_json("2", "FOO-2", "Two")]),
         )
         .await;
-        let summary = sync(&db, &client, &projects, false, NOW + 3 * 60_000)
+        let summary = sync(&db, &client, &projects, &[], false, NOW + 3 * 60_000)
             .await
             .unwrap();
         assert_eq!(
@@ -586,7 +638,7 @@ mod tests {
             page(&[issue_json("1", "FOO-1", "One")]),
         )
         .await;
-        sync(&db, &client, &keys(&["FOO"]), false, NOW)
+        sync(&db, &client, &keys(&["FOO"]), &[], false, NOW)
             .await
             .unwrap();
 
@@ -596,7 +648,7 @@ mod tests {
             page(&[issue_json("9", "BAR-9", "Nine")]),
         )
         .await;
-        let summary = sync(&db, &client, &keys(&["BAR"]), false, NOW + 60_000)
+        let summary = sync(&db, &client, &keys(&["BAR"]), &[], false, NOW + 60_000)
             .await
             .unwrap();
         assert_eq!(summary.mode, JiraSyncMode::Full);
@@ -612,7 +664,9 @@ mod tests {
         let projects = keys(&["FOO"]);
 
         mock_search(&mut server, "FOO", page(&[issue_json("1", "FOO-1", "One")])).await;
-        sync(&db, &client, &projects, false, NOW).await.unwrap();
+        sync(&db, &client, &projects, &[], false, NOW)
+            .await
+            .unwrap();
 
         server.reset();
         server
@@ -621,7 +675,7 @@ mod tests {
             .create_async()
             .await;
         assert!(
-            sync(&db, &client, &projects, true, NOW + 60_000)
+            sync(&db, &client, &projects, &[], true, NOW + 60_000)
                 .await
                 .is_err()
         );
@@ -635,7 +689,7 @@ mod tests {
         let db = Db::new(db::open_in_memory());
         let client = client("http://127.0.0.1:9");
         assert!(matches!(
-            sync(&db, &client, &[], false, NOW).await,
+            sync(&db, &client, &[], &[], false, NOW).await,
             Err(AppError::Validation(_))
         ));
     }
@@ -646,9 +700,16 @@ mod tests {
         mock_statuses(&mut server).await;
         let db = Db::new(db::open_in_memory());
         mock_search(&mut server, "FOO", page(&[issue_json("1", "FOO-1", "One")])).await;
-        sync(&db, &client(&server.url()), &keys(&["FOO"]), false, NOW)
-            .await
-            .unwrap();
+        sync(
+            &db,
+            &client(&server.url()),
+            &keys(&["FOO"]),
+            &[],
+            false,
+            NOW,
+        )
+        .await
+        .unwrap();
 
         let issue = &list(&db.lock()).unwrap().issues[0];
         assert_eq!(
@@ -717,6 +778,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn issues_in_watched_statuses_are_listed_whoever_has_them() {
+        let mut server = Server::new_async().await;
+        mock_statuses(&mut server).await;
+        let db = Db::new(db::open_in_memory());
+        let client = client(&server.url());
+        let projects = keys(&["FOO"]);
+        let watched = [status("FOO", "10")];
+        let to_do = |id: &str, key: &str| {
+            issue_json(id, key, "S").replace(
+                r#""id":"3","name":"In Progress""#,
+                r#""id":"10","name":"To Do""#,
+            )
+        };
+
+        mock_search(
+            &mut server,
+            "statusCategory != Done ORDER BY",
+            page(&[to_do("1", "FOO-1")]),
+        )
+        .await;
+        // Also returns the user's own FOO-1, which must stay assigned.
+        let watched_search = mock_search(
+            &mut server,
+            r#"AND ((project = \"FOO\" AND status = 10))"#,
+            page(&[to_do("1", "FOO-1"), to_do("2", "FOO-2")]),
+        )
+        .await;
+        sync(&db, &client, &projects, &watched, false, NOW)
+            .await
+            .unwrap();
+        watched_search.assert_async().await;
+        let issues = list(&db.lock()).unwrap().issues;
+        let listed: Vec<_> = issues
+            .iter()
+            .map(|i| (i.key.as_str(), i.assigned_to_me))
+            .collect();
+        assert_eq!(listed, [("FOO-1", true), ("FOO-2", false)]);
+
+        // FOO-2 moved on to a status that isn't watched: it leaves the list.
+        server.reset();
+        mock_statuses(&mut server).await;
+        mock_search(&mut server, "statusCategory != Done", page(&[])).await;
+        mock_search(
+            &mut server,
+            "assignee IS EMPTY",
+            page(&[issue_json("2", "FOO-2", "S")]),
+        )
+        .await;
+        sync(&db, &client, &projects, &watched, false, NOW + 60_000)
+            .await
+            .unwrap();
+        let keys: Vec<_> = list(&db.lock())
+            .unwrap()
+            .issues
+            .into_iter()
+            .map(|i| i.key)
+            .collect();
+        assert_eq!(keys, ["FOO-1"]);
+        assert!(!exists(&db.lock(), "2").unwrap());
+    }
+
+    #[tokio::test]
     async fn done_issues_are_dropped_unless_in_a_workstream() {
         let mut server = Server::new_async().await;
         mock_statuses(&mut server).await;
@@ -736,7 +859,9 @@ mod tests {
             page(&[issue_json("1", "FOO-1", "S"), issue_json("2", "FOO-2", "S")]),
         )
         .await;
-        sync(&db, &client, &projects, false, NOW).await.unwrap();
+        sync(&db, &client, &projects, &[], false, NOW)
+            .await
+            .unwrap();
         full.assert_async().await;
         let workstream_id = link_to_workstream(&db, "2");
 
@@ -750,7 +875,7 @@ mod tests {
             page(&[done("1", "FOO-1"), done("2", "FOO-2")]),
         )
         .await;
-        let summary = sync(&db, &client, &projects, false, NOW + 60_000)
+        let summary = sync(&db, &client, &projects, &[], false, NOW + 60_000)
             .await
             .unwrap();
         assert_eq!(summary.removed, 2);
@@ -782,7 +907,9 @@ mod tests {
             ]),
         )
         .await;
-        sync(&db, &client, &projects, false, NOW).await.unwrap();
+        sync(&db, &client, &projects, &[], false, NOW)
+            .await
+            .unwrap();
         let workstream_id = link_to_workstream(&db, "2");
 
         // FOO-2 is handed to someone else and renamed; FOO-1 is unchanged.
@@ -795,7 +922,7 @@ mod tests {
             page(&[issue_json("2", "FOO-2", "Two (handed over)")]),
         )
         .await;
-        let summary = sync(&db, &client, &projects, false, NOW + 60_000)
+        let summary = sync(&db, &client, &projects, &[], false, NOW + 60_000)
             .await
             .unwrap();
         assert_eq!(summary.removed, 1);
@@ -820,7 +947,9 @@ mod tests {
             page(&[issue_json("7", "FOO-7", "Seven")]),
         )
         .await;
-        sync(&db, &client, &projects, false, NOW).await.unwrap();
+        sync(&db, &client, &projects, &[], false, NOW)
+            .await
+            .unwrap();
         let workstream_id = link_to_workstream(&db, "7");
 
         // FOO-7 is no longer assigned; the full sync finds it only through its id.
@@ -833,7 +962,7 @@ mod tests {
             page(&[issue_json("7", "OTHER-7", "Seven (moved)")]),
         )
         .await;
-        sync(&db, &client, &projects, true, NOW + 60_000)
+        sync(&db, &client, &projects, &[], true, NOW + 60_000)
             .await
             .unwrap();
         by_id.assert_async().await;

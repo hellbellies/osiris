@@ -50,7 +50,7 @@ osiris signs in with your Atlassian account email plus an API token.
    - **Projects**: comma-separated project keys, e.g. `FOO, BAR` (the `FOO` in `FOO-123`)
    - **API token**: the token from step 3
 
-osiris keeps only issues assigned to you that are not done; an issue that is done (or reassigned) disappears from the list, unless it is in a workstream.
+osiris keeps only issues assigned to you that are not done; an issue that is done (or reassigned) disappears from the list, unless it is in a workstream. Under **Also show** you can add statuses whose issues are listed whoever they are assigned to, e.g. every SUP issue in **Neu**: pick a space and one of its statuses (they are known after the first fetch). Such issues show a people icon, and leave the list once they move to another status. Changing these rules makes the next fetch a full one.
 
 The token has the same permissions as your account, so osiris sees exactly the issues you can see in Jira. Self-hosted Jira (Server/Data Center) is not supported yet.
 
